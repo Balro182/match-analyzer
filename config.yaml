@@ -1,0 +1,77 @@
+source:
+  listing_url: "https://www.mutating.com/football-stats/"
+  request_delay_seconds: 1.0
+  timeout_seconds: 25
+
+recommendations:
+  min_score: 60
+  rules:
+    - id: over_1_5
+      label: "Over 1.5 gola"
+      enabled: true
+      weight: 1.0
+      conditions:
+        - metric: "Over 1.5 goals"
+          aggregation: min
+          operator: ">="
+          threshold: 70
+        - metric: "Goals scored per game"
+          aggregation: mean
+          operator: ">="
+          threshold: 1.25
+
+    - id: over_2_5
+      label: "Over 2.5 gola"
+      enabled: true
+      weight: 1.0
+      conditions:
+        - metric: "Over 2.5 goals"
+          aggregation: mean
+          operator: ">="
+          threshold: 60
+        - metric: "Goals scored per game"
+          aggregation: sum
+          operator: ">="
+          threshold: 2.8
+
+    - id: btts_yes
+      label: "BTTS: tak"
+      enabled: true
+      weight: 1.0
+      conditions:
+        - metric: "Both Teams to Score"
+          aggregation: mean
+          operator: ">="
+          threshold: 55
+        - metric: "Team scored"
+          aggregation: min
+          operator: ">="
+          threshold: 70
+
+    - id: home_win
+      label: "Wygrana gospodarzy"
+      enabled: true
+      weight: 1.0
+      conditions:
+        - metric: "Win"
+          side: home
+          operator: ">="
+          threshold: 60
+        - metric: "Lose"
+          side: away
+          operator: ">="
+          threshold: 30
+
+    - id: away_win
+      label: "Wygrana gości"
+      enabled: true
+      weight: 1.0
+      conditions:
+        - metric: "Win"
+          side: away
+          operator: ">="
+          threshold: 60
+        - metric: "Lose"
+          side: home
+          operator: ">="
+          threshold: 30
