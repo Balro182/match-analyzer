@@ -7,7 +7,7 @@ recommendations:
   min_score: 60
   rules:
     - id: over_1_5
-      label: "Over 1.5 gola"
+      label: "Powyżej 1,5 gola"
       enabled: true
       weight: 1.0
       conditions:
@@ -21,7 +21,7 @@ recommendations:
           threshold: 1.25
 
     - id: over_2_5
-      label: "Over 2.5 gola"
+      label: "Powyżej 2,5 gola"
       enabled: true
       weight: 1.0
       conditions:
@@ -35,7 +35,7 @@ recommendations:
           threshold: 2.8
 
     - id: btts_yes
-      label: "BTTS: tak"
+      label: "Obie drużyny strzelą — tak"
       enabled: true
       weight: 1.0
       conditions:
