@@ -83,9 +83,12 @@ def _find_metric(stats: dict[str, dict[str, float]], requested: str) -> dict[str
     return None
 
 
-def _legacy_thresholds(condition: dict[str, Any]) -> tuple[float, float]:
-    threshold = float(condition.get("threshold", 0))
-    return float(condition.get("threshold_home", threshold)), float(condition.get("threshold_away", threshold))
+def _thresholds(condition: dict[str, Any]) -> tuple[float, float]:
+    legacy = max(float(condition.get("threshold", 1)), 0.0001)
+    return (
+        max(float(condition.get("threshold_home", legacy)), 0.0001),
+        max(float(condition.get("threshold_away", legacy)), 0.0001),
+    )
 
 
 def _evaluate_1x2(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation | None:
@@ -97,26 +100,26 @@ def _evaluate_1x2(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
     draws = _find_metric(stats, "Draw")
     losses = _find_metric(stats, "Lose")
     condition = (rule.get("conditions") or [{}])[0]
-    threshold_home, threshold_away = _legacy_thresholds(condition)
+    threshold_home, threshold_away = _thresholds(condition)
     threshold = (threshold_home + threshold_away) / 2
     op_text = condition.get("operator", ">=")
     op = OPS[op_text]
 
     if rule_id == "draw":
         if draws is None:
-            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych Win/Draw/Lose potrzebnych do obliczenia rynku 1X2."])
+            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych o remisach potrzebnych do obliczenia rynku 1X2."])
         left = float(draws["home"])
         right = float(draws["away"])
         formula = "remisy A + remisy B"
     elif rule_id == "home_win":
         if wins is None or losses is None:
-            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych Win/Draw/Lose potrzebnych do obliczenia rynku 1X2."])
+            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych o zwycięstwach i porażkach potrzebnych do obliczenia rynku 1X2."])
         left = float(wins["home"])
         right = float(losses["away"])
         formula = "wygrane A + porażki B"
     else:
         if wins is None or losses is None:
-            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych Win/Draw/Lose potrzebnych do obliczenia rynku 1X2."])
+            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych o zwycięstwach i porażkach potrzebnych do obliczenia rynku 1X2."])
         left = float(wins["away"])
         right = float(losses["home"])
         formula = "wygrane B + porażki A"
@@ -125,7 +128,7 @@ def _evaluate_1x2(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
     passed = op(value, threshold)
     reason = (
         f"Stała formuła 1X2 — {formula}: ({left:.2f} + {right:.2f}) / 2 = {value:.2f} "
-        f"{op_text} średni próg {threshold:g} — {'warunek spełniony' if passed else 'warunek niespełniony'}"
+        f"{op_text} próg {threshold:g} — {'warunek spełniony' if passed else 'warunek niespełniony'}"
     )
     return Recommendation(rule_id, rule["label"], 100.0 if passed else 0.0, passed, [reason])
 
@@ -137,9 +140,9 @@ def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
 
     conditions = rule.get("conditions", [])
     reasons: list[str] = []
-    passed_checks = 0
-    total_checks = 0
-    combine = bool(rule.get("combine", False))
+    condition_scores: list[float] = []
+    condition_passed: list[bool] = []
+    mode = str(rule.get("mode") or ("mean" if rule.get("combine") else "both"))
 
     for condition in conditions:
         metric_name = condition["metric"]
@@ -147,41 +150,50 @@ def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
         metric = _find_metric(stats, metric_name)
         if metric is None:
             reasons.append(f"Brak danych dla statystyki: {translated_name}")
-            total_checks += 1 if combine else 2
+            condition_scores.append(0.0)
+            condition_passed.append(False)
             continue
 
         home_value = float(metric["home"])
         away_value = float(metric["away"])
-        threshold_home, threshold_away = _legacy_thresholds(condition)
+        threshold_home, threshold_away = _thresholds(condition)
         op_text = condition.get("operator", ">=")
         op = OPS[op_text]
+        home_passed = op(home_value, threshold_home)
+        away_passed = op(away_value, threshold_away)
 
-        if combine:
+        if mode == "mean":
             value = (home_value + away_value) / 2
             threshold = (threshold_home + threshold_away) / 2
             passed = op(value, threshold)
-            total_checks += 1
-            passed_checks += int(passed)
+            score = 100.0 if passed else 0.0
             reasons.append(
                 f"Średnia A+B — {translated_name}: ({home_value:.2f} + {away_value:.2f}) / 2 = {value:.2f} "
-                f"{op_text} średni próg {threshold:g} — {'warunek spełniony' if passed else 'warunek niespełniony'}"
+                f"{op_text} próg {threshold:g} — {'warunek spełniony' if passed else 'warunek niespełniony'}"
+            )
+        elif mode == "any":
+            passed = home_passed or away_passed
+            score = 100.0 if passed else 0.0
+            reasons.append(
+                f"Wystarczy jedna drużyna — A: {home_value:.2f} {op_text} {threshold_home:g} "
+                f"({'TAK' if home_passed else 'NIE'}), B: {away_value:.2f} {op_text} {threshold_away:g} "
+                f"({'TAK' if away_passed else 'NIE'})"
             )
         else:
-            home_passed = op(home_value, threshold_home)
-            away_passed = op(away_value, threshold_away)
-            total_checks += 2
-            passed_checks += int(home_passed) + int(away_passed)
+            passed = home_passed and away_passed
+            score = 50.0 * (int(home_passed) + int(away_passed))
             reasons.append(
-                f"Drużyna A — {translated_name}: {home_value:.2f} {op_text} {threshold_home:g} — "
-                f"{'warunek spełniony' if home_passed else 'warunek niespełniony'}"
-            )
-            reasons.append(
-                f"Drużyna B — {translated_name}: {away_value:.2f} {op_text} {threshold_away:g} — "
-                f"{'warunek spełniony' if away_passed else 'warunek niespełniony'}"
+                f"Obie drużyny — A: {home_value:.2f} {op_text} {threshold_home:g} "
+                f"({'TAK' if home_passed else 'NIE'}), B: {away_value:.2f} {op_text} {threshold_away:g} "
+                f"({'TAK' if away_passed else 'NIE'})"
             )
 
-    score = 100.0 * passed_checks / total_checks if total_checks else 0.0
-    return Recommendation(rule["id"], rule["label"], score, total_checks > 0 and passed_checks == total_checks, reasons)
+        condition_scores.append(score)
+        condition_passed.append(passed)
+
+    score = sum(condition_scores) / len(condition_scores) if condition_scores else 0.0
+    passed = bool(condition_passed) and all(condition_passed)
+    return Recommendation(rule["id"], rule["label"], score, passed, reasons)
 
 
 def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recommendation]:
