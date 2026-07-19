@@ -9,6 +9,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE_URL = "https://www.mutating.com"
 DEFAULT_LISTING_URL = f"{BASE_URL}/football-stats/"
@@ -20,10 +22,9 @@ DATE_URLS = {
     2: f"{BASE_URL}/football-stats/future-days/",
 }
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; AnalizatorMeczow/1.3; +browser-app)",
+    "User-Agent": "Mozilla/5.0 (compatible; AnalizatorMeczow/2.0; +browser-app)",
     "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
 }
-
 COUNTRY_NAMES_PL = {
     "WORLD": "Świat", "AUSTRALIA": "Australia", "BELARUS": "Białoruś", "BHUTAN": "Bhutan",
     "BOLIVIA": "Boliwia", "BRAZIL": "Brazylia", "BULGARIA": "Bułgaria", "CHILE": "Chile",
@@ -77,6 +78,18 @@ def polish_country_name(value: str | None) -> str | None:
 def create_session() -> requests.Session:
     session = requests.Session()
     session.headers.update(HEADERS)
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=0.6,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
     return session
 
 
@@ -196,13 +209,12 @@ def _extract_stat_pairs(text: str) -> dict[str, dict[str, float]]:
     stats: dict[str, dict[str, float]] = {}
     number = r"(\d+(?:[.,]\d+)?%?)"
     for label in sorted(KNOWN_METRICS, key=len, reverse=True):
-        pattern = re.compile(rf"{number}\s+{re.escape(label)}\s+{number}", re.I)
-        match = pattern.search(text)
-        if not match:
-            continue
-        home = float(match.group(1).replace("%", "").replace(",", "."))
-        away = float(match.group(2).replace("%", "").replace(",", "."))
-        stats[label] = {"home": home, "away": away}
+        match = re.compile(rf"{number}\s+{re.escape(label)}\s+{number}", re.I).search(text)
+        if match:
+            stats[label] = {
+                "home": float(match.group(1).replace("%", "").replace(",", ".")),
+                "away": float(match.group(2).replace("%", "").replace(",", ".")),
+            }
     return stats
 
 
@@ -239,14 +251,21 @@ def parse_match(session: requests.Session, summary: MatchSummary) -> MatchDetail
     )
 
 
-def scrape_matches(summaries: Iterable[MatchSummary], delay_seconds: float = 1.0) -> list[MatchDetails]:
-    session = create_session()
+def scrape_matches(
+    summaries: Iterable[MatchSummary],
+    delay_seconds: float = 0.25,
+    session: requests.Session | None = None,
+) -> list[MatchDetails]:
+    active_session = session or create_session()
     results: list[MatchDetails] = []
     for index, summary in enumerate(summaries):
         try:
-            results.append(parse_match(session, summary))
+            details = parse_match(active_session, summary)
+            if not details.stats:
+                details.errors.append("Nie znaleziono żadnych obsługiwanych statystyk na stronie meczu.")
+            results.append(details)
         except Exception as exc:
             results.append(MatchDetails(**asdict(summary), errors=[str(exc)]))
-        if index:
+        if index < len(results) and delay_seconds:
             time.sleep(max(0.0, delay_seconds))
     return results
