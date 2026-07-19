@@ -22,7 +22,7 @@ def _actual_by_rule(
     btts = home > 0 and away > 0
     home_ft, away_ft = _side_states(home, away)
 
-    # Statystyki opisowe nie są bezpośrednio zdarzeniami wynikowymi.
+    # Wskaźniki opisowe nie są samodzielnymi zdarzeniami meczowymi.
     if rule_id in {"avg_scored", "avg_conceded"}:
         return None
 
@@ -77,7 +77,6 @@ def _actual_by_rule(
 
     ht_total = home_ht + away_ht
     home_ht_state, away_ht_state = _side_states(home_ht, away_ht)
-
     half_time = {
         "home_win_ht": home_ht > away_ht,
         "draw_ht": home_ht == away_ht,
@@ -91,8 +90,7 @@ def _actual_by_rule(
     if rule_id in half_time:
         return half_time[rule_id]
 
-    # Ogólne rynki HT/FT są spełnione, gdy wskazany układ wystąpił
-    # z perspektywy którejkolwiek z dwóch drużyn.
+    # Ogólne HT/FT są spełnione, gdy układ wystąpił z perspektywy jednej z drużyn.
     htft_map = {
         "win_win": ("win", "win"),
         "win_draw": ("win", "draw"),
@@ -123,10 +121,15 @@ def settle_recommendations(
         predicted = bool(recommendation.get("passed"))
         rule_id = str(recommendation.get("rule_id") or "")
         actual = _actual_by_rule(rule_id, home, away, home_ht, away_ht)
+
         if actual is None:
             result = "brak danych"
+        elif not predicted:
+            # FALSE nie jest typem przeciwnym. Oznacza tylko, że aplikacja nie poleciła rynku.
+            result = "brak typu"
         else:
-            result = "trafiona" if predicted == actual else "nietrafiona"
+            result = "trafiona" if actual else "nietrafiona"
+
         rows.append(
             {
                 "rule_id": rule_id,
