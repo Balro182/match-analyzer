@@ -11,10 +11,12 @@ import yaml
 
 from engine import analyze_match, metric_label
 from scraper import create_session, list_matches_for_dates, scrape_matches
+from settlement import settle_recommendations
+from storage import delete_match, init_db, list_matches, save_match, settle_match
 
 ROOT = Path(__file__).parent
-
 st.set_page_config(page_title="Analizator meczów", page_icon="⚽", layout="wide")
+init_db()
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -27,255 +29,176 @@ def load_config() -> dict:
         return yaml.safe_load(handle)
 
 
-def date_sequence(start: date, end: date) -> tuple[date, ...]:
-    return tuple(start + timedelta(days=offset) for offset in range((end - start).days + 1))
+def dates_between(start: date, end: date) -> tuple[date, ...]:
+    return tuple(start + timedelta(days=i) for i in range((end - start).days + 1))
 
 
-def build_runtime_config(base_config: dict) -> dict:
-    runtime = copy.deepcopy(base_config)
-    st.subheader("Progi predykcji")
-    st.caption("Tutaj ustawiasz wszystkie warunki używane do oceny spotkań. Zmiany obowiązują dla bieżącej analizy.")
+def runtime_config(base: dict) -> dict:
+    result = copy.deepcopy(base)
+    with st.sidebar:
+        st.subheader("Progi predykcji")
+        st.caption("Każdy próg dotyczy bieżącej analizy i zostaje zapisany razem z meczem.")
+        for r_i, rule in enumerate(result["recommendations"]["rules"]):
+            with st.expander(rule["label"]):
+                rule["enabled"] = st.checkbox("Predykcja aktywna", bool(rule.get("enabled", True)), key=f"en_{r_i}")
+                for c_i, condition in enumerate(rule.get("conditions", [])):
+                    side = condition.get("side")
+                    method = "gospodarze" if side == "home" else "goście" if side == "away" else {
+                        "min": "niższa wartość", "max": "wyższa wartość", "sum": "suma", "mean": "średnia"
+                    }.get(condition.get("aggregation"), "średnia")
+                    current = float(condition["threshold"])
+                    condition["threshold"] = st.number_input(
+                        f"{metric_label(condition['metric'])} — {method} {condition.get('operator', '>=')}",
+                        value=current, step=0.05 if current < 10 else 1.0, key=f"th_{r_i}_{c_i}"
+                    )
+    return result
 
-    for rule_index, rule in enumerate(runtime.get("recommendations", {}).get("rules", [])):
-        with st.expander(rule["label"], expanded=False):
-            rule["enabled"] = st.checkbox(
-                "Predykcja aktywna",
-                value=bool(rule.get("enabled", True)),
-                key=f"rule_enabled_{rule_index}",
-            )
-            for condition_index, condition in enumerate(rule.get("conditions", [])):
-                metric_name = metric_label(condition["metric"])
-                side = condition.get("side")
-                aggregation = condition.get("aggregation")
-                if side == "home":
-                    method = "gospodarze"
-                elif side == "away":
-                    method = "goście"
-                else:
-                    method = {
-                        "min": "niższa wartość obu drużyn",
-                        "max": "wyższa wartość obu drużyn",
-                        "sum": "suma obu drużyn",
-                        "mean": "średnia obu drużyn",
-                    }.get(aggregation, "średnia obu drużyn")
 
-                label = f"{metric_name} — {method} {condition.get('operator', '>=')}"
-                current = float(condition["threshold"])
-                step = 0.05 if current < 10 else 1.0
-                condition["threshold"] = st.number_input(
-                    label,
-                    value=current,
-                    step=step,
-                    key=f"threshold_{rule_index}_{condition_index}",
-                )
-    return runtime
+def prediction_table(item: dict) -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "Predykcja": r["label"],
+            "Wynik zgodności": r["score"],
+            "Aktywna rekomendacja": "TAK" if r["passed"] else "NIE",
+            "Uzasadnienie": " | ".join(r.get("reasons", [])),
+        }
+        for r in item["recommendations"]
+    ])
 
 
 base_config = load_config()
 st.title("⚽ Analizator meczów")
-st.caption("Analiza spotkań, filtrowanie według kraju i ligi oraz testowanie reguł na dostępnych datach historycznych.")
+st.caption("Predykcje przedmeczowe, zapis do weryfikacji, rozliczanie wyników i kalibracja progów.")
 
-today = date.today()
-available_min = today - timedelta(days=2)
-available_max = today + timedelta(days=2)
+analysis_tab, pending_tab, history_tab, calibration_tab = st.tabs([
+    "Analiza meczów", "Mecze do rozliczenia", "Historia", "Kalibracja progów"
+])
 
-with st.sidebar:
-    st.header("Zakres analizy")
-    selected_range = st.date_input(
-        "Zakres dat",
-        value=(today, today),
-        min_value=available_min,
-        max_value=available_max,
-        format="DD.MM.YYYY",
-        help="Mutating udostępnia w tym widoku dane od przedwczoraj do dwóch dni naprzód.",
-    )
-    if isinstance(selected_range, tuple) and len(selected_range) == 2:
-        start_date, end_date = selected_range
-    else:
-        start_date = end_date = selected_range
-
-    max_matches = st.slider("Maksymalna liczba analizowanych spotkań", 1, 100, 20)
-    min_score = st.slider(
-        "Minimalny wynik rekomendacji",
-        0,
-        100,
-        int(base_config["recommendations"].get("min_score", 60)),
-        help="Pokazuje rekomendacje z wynikiem równym lub wyższym od progu. To zgodność z regułami, a nie prawdopodobieństwo procentowe.",
-    )
-    st.divider()
-    runtime_config = build_runtime_config(base_config)
-
-if start_date > end_date:
-    st.error("Data początkowa nie może być późniejsza niż data końcowa.")
-    st.stop()
-
-selected_dates = date_sequence(start_date, end_date)
-
-try:
-    with st.spinner("Pobieranie listy spotkań..."):
-        listing, unsupported_dates = load_listing_for_dates(selected_dates)
-except Exception as exc:
-    st.error(f"Nie udało się pobrać listy spotkań: {exc}")
-    st.stop()
-
-if unsupported_dates:
-    formatted = ", ".join(value.strftime("%d.%m.%Y") for value in unsupported_dates)
-    st.warning(f"Źródło nie udostępnia stron dla dat: {formatted}.")
-
-countries = sorted({match.country for match in listing if match.country})
-col1, col2, col3 = st.columns(3)
-selected_country = col1.selectbox("Kraj", ["Wszystkie"] + countries)
-
-country_filtered_leagues = sorted(
-    {
-        match.league
-        for match in listing
-        if match.league and (selected_country == "Wszystkie" or match.country == selected_country)
-    }
-)
-selected_league = col2.selectbox("Liga", ["Wszystkie"] + country_filtered_leagues)
-search = col3.text_input("Wyszukaj drużynę")
-
-filtered = [
-    match
-    for match in listing
-    if (selected_country == "Wszystkie" or match.country == selected_country)
-    and (selected_league == "Wszystkie" or match.league == selected_league)
-    and (not search or search.casefold() in f"{match.home_team} {match.away_team}".casefold())
-]
-
-summary_col1, summary_col2, summary_col3 = st.columns(3)
-summary_col1.metric("Dostępne spotkania", len(listing))
-summary_col2.metric("Po zastosowaniu filtrów", len(filtered))
-summary_col3.metric("Kraje", len(countries))
-
-st.caption(
-    f"Wybrany okres: {start_date.strftime('%d.%m.%Y')}–{end_date.strftime('%d.%m.%Y')}. "
-    f"Do analizy zostanie użyte maksymalnie {min(max_matches, len(filtered))} spotkań."
-)
-
-if not countries and listing:
-    st.warning("Nie udało się rozpoznać nazw krajów w danych źródłowych. Parser został zaktualizowany, ale układ strony mógł ponownie się zmienić.")
-
-if st.button("Pobierz statystyki i rozpocznij analizę", type="primary", disabled=not filtered):
-    progress = st.progress(0, text="Przygotowywanie analizy...")
-    selected = filtered[:max_matches]
-    details = []
-    for index, summary in enumerate(selected, start=1):
-        progress.progress(
-            index / len(selected),
-            text=f"Analizowanie meczu {index} z {len(selected)}: {summary.home_team} – {summary.away_team}",
+with analysis_tab:
+    today = date.today()
+    with st.sidebar:
+        st.header("Zakres analizy")
+        selected_range = st.date_input(
+            "Zakres dat", value=(today, today), min_value=today - timedelta(days=2),
+            max_value=today + timedelta(days=2), format="DD.MM.YYYY"
         )
-        details.extend(scrape_matches([summary], delay_seconds=0))
-    progress.empty()
+        start_date, end_date = selected_range if isinstance(selected_range, tuple) and len(selected_range) == 2 else (selected_range, selected_range)
+        max_matches = st.slider("Maksymalna liczba spotkań", 1, 100, 20)
+        min_score = st.slider("Minimalny wynik rekomendacji", 0, 100, int(base_config["recommendations"].get("min_score", 60)))
+        current_config = runtime_config(base_config)
 
-    rows = []
-    full_results = []
-    for match in details:
-        match_dict = match.to_dict()
-        recommendations = analyze_match(match_dict, runtime_config)
-        full_results.append(
-            {"match": match_dict, "recommendations": [recommendation.to_dict() for recommendation in recommendations]}
-        )
-        for recommendation in recommendations:
-            if recommendation.score >= min_score:
-                rows.append(
-                    {
-                        "Data": match.match_date or match.listing_date,
-                        "Godzina": match.kickoff,
-                        "Kraj": match.country,
-                        "Liga": match.league,
-                        "Mecz": f"{match.home_team} – {match.away_team}",
-                        "Rekomendacja": recommendation.label,
-                        "Wynik zgodności": recommendation.score,
-                        "Wszystkie warunki spełnione": "TAK" if recommendation.passed else "NIE",
-                        "Uzasadnienie": " | ".join(recommendation.reasons),
-                        "Adres źródłowy": match.url,
-                    }
-                )
+    try:
+        listing, unsupported = load_listing_for_dates(dates_between(start_date, end_date))
+    except Exception as exc:
+        st.error(f"Nie udało się pobrać listy spotkań: {exc}")
+        listing, unsupported = [], []
 
-    st.session_state["analysis_results"] = full_results
-    st.session_state["analysis_rows"] = rows
-    st.session_state["analysis_period"] = (start_date.isoformat(), end_date.isoformat())
+    countries = sorted({m.country for m in listing if m.country})
+    c1, c2, c3 = st.columns(3)
+    country = c1.selectbox("Kraj", ["Wszystkie"] + countries)
+    leagues = sorted({m.league for m in listing if m.league and (country == "Wszystkie" or m.country == country)})
+    league = c2.selectbox("Liga", ["Wszystkie"] + leagues)
+    search = c3.text_input("Wyszukaj drużynę")
+    filtered = [m for m in listing if (country == "Wszystkie" or m.country == country) and (league == "Wszystkie" or m.league == league) and (not search or search.casefold() in f"{m.home_team} {m.away_team}".casefold())]
 
-if "analysis_rows" in st.session_state:
-    rows = st.session_state["analysis_rows"]
-    full_results = st.session_state["analysis_results"]
-    period = st.session_state.get("analysis_period")
+    if st.button("Pobierz statystyki i rozpocznij analizę", type="primary", disabled=not filtered):
+        selected = filtered[:max_matches]
+        progress = st.progress(0, text="Rozpoczynanie analizy...")
+        details = []
+        for idx, summary in enumerate(selected, 1):
+            progress.progress(idx / len(selected), text=f"Analiza {idx}/{len(selected)}: {summary.home_team} – {summary.away_team}")
+            details.extend(scrape_matches([summary], delay_seconds=0))
+        progress.empty()
+        results = []
+        for match in details:
+            recs = analyze_match(match.to_dict(), current_config)
+            results.append({
+                "match": match.to_dict(),
+                "recommendations": [r.to_dict() for r in recs],
+                "thresholds": current_config["recommendations"]["rules"],
+                "minimum_score": min_score,
+            })
+        st.session_state["analysis_results"] = results
 
-    st.subheader("Ranking rekomendacji")
-    if period:
-        st.caption(f"Wyniki analizy dla okresu {period[0]}–{period[1]}")
-
-    if rows:
-        dataframe = pd.DataFrame(rows).sort_values(
-            ["Wynik zgodności", "Data", "Mecz"], ascending=[False, True, True]
-        )
-        st.dataframe(
-            dataframe,
-            use_container_width=True,
-            hide_index=True,
-            column_config={"Adres źródłowy": st.column_config.LinkColumn("Źródło danych")},
-        )
-        st.download_button(
-            "Pobierz wyniki jako plik CSV",
-            dataframe.to_csv(index=False).encode("utf-8-sig"),
-            "rekomendacje_meczowe.csv",
-            "text/csv",
-        )
-    else:
-        st.warning("Żadna rekomendacja nie osiągnęła ustawionego minimalnego wyniku.")
-
-    st.subheader("Szczegóły analizowanych spotkań")
-    for item in full_results:
+    for index, item in enumerate(st.session_state.get("analysis_results", [])):
         match = item["match"]
-        display_date = match.get("match_date") or match.get("listing_date") or "brak daty"
-        with st.expander(
-            f"{display_date} | {match['home_team']} – {match['away_team']} "
-            f"({match.get('kickoff') or 'brak podanej godziny'})"
-        ):
+        with st.expander(f"{match.get('match_date') or match.get('listing_date')} | {match['home_team']} – {match['away_team']}"):
             st.write(f"**Kraj:** {match.get('country') or 'brak danych'}  \n**Liga:** {match.get('league') or 'brak danych'}")
-            if match.get("errors"):
-                st.error("; ".join(match["errors"]))
+            table = prediction_table(item)
+            shown = table[table["Wynik zgodności"] >= item.get("minimum_score", 0)]
+            st.dataframe(shown, use_container_width=True, hide_index=True)
+            if st.button("Zapisz ten mecz do weryfikacji", key=f"save_{index}"):
+                ok, message = save_match(item)
+                (st.success if ok else st.warning)(message)
 
-            recommendation_rows = [
-                {
-                    "Rekomendacja": recommendation["label"],
-                    "Wynik zgodności": recommendation["score"],
-                    "Wszystkie warunki spełnione": "TAK" if recommendation["passed"] else "NIE",
-                    "Uzasadnienie": " | ".join(recommendation["reasons"]),
-                }
-                for recommendation in item["recommendations"]
-            ]
-            recommendation_frame = pd.DataFrame(recommendation_rows)
-            if not recommendation_frame.empty:
-                st.dataframe(recommendation_frame, use_container_width=True, hide_index=True)
+with pending_tab:
+    pending = list_matches("oczekuje")
+    st.subheader("Mecze oczekujące na wynik")
+    if not pending:
+        st.info("Brak zapisanych meczów oczekujących na rozliczenie.")
+    for row in pending:
+        with st.expander(f"{row['match_date']} | {row['home_team']} – {row['away_team']}"):
+            snapshot = json.loads(row["snapshot_json"])
+            st.dataframe(prediction_table(snapshot), use_container_width=True, hide_index=True)
+            col1, col2 = st.columns(2)
+            home_ft = col1.number_input(f"Gole: {row['home_team']}", min_value=0, max_value=30, step=1, key=f"hft_{row['id']}")
+            away_ft = col2.number_input(f"Gole: {row['away_team']}", min_value=0, max_value=30, step=1, key=f"aft_{row['id']}")
+            include_ht = st.checkbox("Podaj także wynik do przerwy", key=f"iht_{row['id']}")
+            home_ht = away_ht = None
+            if include_ht:
+                h1, h2 = st.columns(2)
+                home_ht = h1.number_input(f"Do przerwy: {row['home_team']}", min_value=0, max_value=20, step=1, key=f"hht_{row['id']}")
+                away_ht = h2.number_input(f"Do przerwy: {row['away_team']}", min_value=0, max_value=20, step=1, key=f"aht_{row['id']}")
+            b1, b2 = st.columns(2)
+            if b1.button("Rozlicz predykcje", type="primary", key=f"settle_{row['id']}"):
+                settlement = settle_recommendations(snapshot["recommendations"], int(home_ft), int(away_ft), None if home_ht is None else int(home_ht), None if away_ht is None else int(away_ht))
+                settle_match(row["id"], int(home_ft), int(away_ft), None if home_ht is None else int(home_ht), None if away_ht is None else int(away_ht), settlement)
+                st.success("Mecz został rozliczony.")
+                st.rerun()
+            if b2.button("Usuń zapis", key=f"delete_{row['id']}"):
+                delete_match(row["id"])
+                st.rerun()
 
-            stats = match.get("stats", {})
-            if stats:
-                stats_frame = pd.DataFrame(
-                    [
-                        {
-                            "Statystyka": metric_label(name),
-                            "Gospodarze": values["home"],
-                            "Goście": values["away"],
-                        }
-                        for name, values in stats.items()
-                    ]
-                )
-                st.dataframe(stats_frame, use_container_width=True, hide_index=True)
+with history_tab:
+    settled = list_matches("rozliczony")
+    st.subheader("Historia rozliczonych meczów")
+    all_rows = []
+    for row in settled:
+        settlement = json.loads(row["settlement_json"] or "[]")
+        with st.expander(f"{row['match_date']} | {row['home_team']} {row['home_ft']}:{row['away_ft']} {row['away_team']}"):
+            frame = pd.DataFrame(settlement)
+            if not frame.empty:
+                frame = frame.rename(columns={"label": "Predykcja", "score": "Wynik zgodności", "predicted": "Przewidywana", "actual": "Rzeczywista", "result": "Ocena"})
+                st.dataframe(frame[["Predykcja", "Wynik zgodności", "Przewidywana", "Rzeczywista", "Ocena"]], use_container_width=True, hide_index=True)
+            for item in settlement:
+                all_rows.append({"Mecz": f"{row['home_team']} – {row['away_team']}", "Predykcja": item["label"], "Wynik zgodności": item["score"], "Ocena": item["result"]})
+    if all_rows:
+        st.download_button("Pobierz historię CSV", pd.DataFrame(all_rows).to_csv(index=False).encode("utf-8-sig"), "historia_predykcji.csv", "text/csv")
 
-    payload = json.dumps(full_results, ensure_ascii=False, indent=2)
-    st.download_button(
-        "Pobierz pełne dane jako plik JSON",
-        payload.encode("utf-8"),
-        "pelna_analiza_meczow.json",
-        "application/json",
-    )
+with calibration_tab:
+    settled = list_matches("rozliczony")
+    records = []
+    for row in settled:
+        for item in json.loads(row["settlement_json"] or "[]"):
+            if item["result"] in {"trafiona", "nietrafiona"}:
+                records.append(item)
+    if not records:
+        st.info("Kalibracja pojawi się po rozliczeniu pierwszych meczów.")
+    else:
+        frame = pd.DataFrame(records)
+        frame["trafiona"] = frame["result"].eq("trafiona")
+        summary = frame.groupby("label").agg(Typy=("trafiona", "size"), Trafione=("trafiona", "sum"), Średni_wynik=("score", "mean")).reset_index()
+        summary["Skuteczność %"] = (summary["Trafione"] / summary["Typy"] * 100).round(1)
+        summary = summary.rename(columns={"label": "Predykcja", "Średni_wynik": "Średni wynik zgodności"})
+        st.dataframe(summary.sort_values(["Skuteczność %", "Typy"], ascending=[False, False]), use_container_width=True, hide_index=True)
+        chosen = st.selectbox("Predykcja do analizy progów", sorted(frame["label"].unique()))
+        subset = frame[frame["label"] == chosen]
+        threshold_rows = []
+        for threshold in range(0, 101, 5):
+            sample = subset[subset["score"] >= threshold]
+            if len(sample):
+                threshold_rows.append({"Minimalny wynik": threshold, "Liczba typów": len(sample), "Trafione": int(sample["trafiona"].sum()), "Skuteczność %": round(sample["trafiona"].mean() * 100, 1)})
+        st.dataframe(pd.DataFrame(threshold_rows), use_container_width=True, hide_index=True)
+        st.caption("Wnioski są wiarygodniejsze przy większej liczbie rozliczonych typów. Nie należy optymalizować progu na kilku spotkaniach.")
 
-st.info(
-    "Weryfikacja historyczna: wybierz wczoraj lub przedwczoraj, uruchom analizę i porównaj rekomendacje z końcowymi wynikami meczów. "
-    "Obecne źródło udostępnia w widoku dziennym ograniczone okno dat; aplikacja nie udaje dostępu do starszych danych, których strona nie publikuje pod stałym adresem."
-)
-
-# Wymuszenie spójnego ponownego wdrożenia po aktualizacji parsera dat.
+st.warning("Dane są przechowywane w lokalnej bazie SQLite aplikacji. Na Streamlit Community Cloud mogą zostać utracone podczas przebudowy lub przeniesienia aplikacji. Do pełnej trwałości potrzebna będzie zewnętrzna baza, np. Supabase lub PostgreSQL.")
