@@ -6,276 +6,52 @@ source:
 recommendations:
   min_score: 60
   rules:
-    - id: over_1_5
-      label: "Powyżej 1,5 gola"
-      enabled: true
-      conditions:
-        - metric: "Over 1.5 goals"
-          aggregation: min
-          operator: ">="
-          threshold: 70
-        - metric: "Goals scored per game"
-          aggregation: mean
-          operator: ">="
-          threshold: 1.25
-
-    - id: over_2_5
-      label: "Powyżej 2,5 gola"
-      enabled: true
-      conditions:
-        - metric: "Over 2.5 goals"
-          aggregation: mean
-          operator: ">="
-          threshold: 60
-        - metric: "Goals scored per game"
-          aggregation: sum
-          operator: ">="
-          threshold: 2.8
-
-    - id: over_3_5
-      label: "Powyżej 3,5 gola"
-      enabled: true
-      conditions:
-        - metric: "Over 3.5 goals"
-          aggregation: mean
-          operator: ">="
-          threshold: 45
-        - metric: "Goals scored per game"
-          aggregation: sum
-          operator: ">="
-          threshold: 3.4
-
-    - id: under_2_5
-      label: "Poniżej 2,5 gola"
-      enabled: true
-      conditions:
-        - metric: "Under 2.5 goals"
-          aggregation: mean
-          operator: ">="
-          threshold: 60
-        - metric: "Goals conceded per game"
-          aggregation: sum
-          operator: "<="
-          threshold: 2.0
-
-    - id: under_3_5
-      label: "Poniżej 3,5 gola"
-      enabled: true
-      conditions:
-        - metric: "Under 3.5 goals"
-          aggregation: min
-          operator: ">="
-          threshold: 60
-
-    - id: first_half_over_0_5
-      label: "Powyżej 0,5 gola w pierwszej połowie"
-      enabled: true
-      conditions:
-        - metric: "Over 0.5 goals at half-time"
-          aggregation: min
-          operator: ">="
-          threshold: 65
-
-    - id: first_half_over_1_5
-      label: "Powyżej 1,5 gola w pierwszej połowie"
-      enabled: true
-      conditions:
-        - metric: "Over 1.5 goals at half-time"
-          aggregation: mean
-          operator: ">="
-          threshold: 40
-
-    - id: btts_yes
-      label: "Obie drużyny strzelą — tak"
-      enabled: true
-      conditions:
-        - metric: "Both Teams to Score"
-          aggregation: mean
-          operator: ">="
-          threshold: 55
-        - metric: "Team scored"
-          aggregation: min
-          operator: ">="
-          threshold: 70
-
-    - id: btts_no
-      label: "Obie drużyny strzelą — nie"
-      enabled: true
-      conditions:
-        - metric: "Both Teams to Score"
-          aggregation: mean
-          operator: "<="
-          threshold: 40
-        - metric: "Clean sheets"
-          aggregation: max
-          operator: ">="
-          threshold: 55
-
-    - id: btts_over_2_5
-      label: "Obie drużyny strzelą i powyżej 2,5 gola"
-      enabled: true
-      conditions:
-        - metric: "BBTS and Over 2.5"
-          aggregation: mean
-          operator: ">="
-          threshold: 45
-
-    - id: home_scores
-      label: "Gospodarze strzelą gola"
-      enabled: true
-      conditions:
-        - metric: "Team scored"
-          side: home
-          operator: ">="
-          threshold: 75
-
-    - id: away_scores
-      label: "Goście strzelą gola"
-      enabled: true
-      conditions:
-        - metric: "Team scored"
-          side: away
-          operator: ">="
-          threshold: 75
-
-    - id: home_two_goals
-      label: "Gospodarze strzelą co najmniej dwa gole"
-      enabled: true
-      conditions:
-        - metric: "Team scored twice"
-          side: home
-          operator: ">="
-          threshold: 55
-
-    - id: away_two_goals
-      label: "Goście strzelą co najmniej dwa gole"
-      enabled: true
-      conditions:
-        - metric: "Team scored twice"
-          side: away
-          operator: ">="
-          threshold: 55
-
-    - id: home_clean_sheet
-      label: "Gospodarze bez straty gola"
-      enabled: true
-      conditions:
-        - metric: "Clean sheets"
-          side: home
-          operator: ">="
-          threshold: 55
-        - metric: "Team scored"
-          side: away
-          operator: "<="
-          threshold: 65
-
-    - id: away_clean_sheet
-      label: "Goście bez straty gola"
-      enabled: true
-      conditions:
-        - metric: "Clean sheets"
-          side: away
-          operator: ">="
-          threshold: 55
-        - metric: "Team scored"
-          side: home
-          operator: "<="
-          threshold: 65
-
-    - id: home_win
-      label: "Wygrana gospodarzy"
-      enabled: true
-      conditions:
-        - metric: "Win"
-          side: home
-          operator: ">="
-          threshold: 60
-        - metric: "Lose"
-          side: away
-          operator: ">="
-          threshold: 30
-
-    - id: draw
-      label: "Remis"
-      enabled: true
-      conditions:
-        - metric: "Draw"
-          aggregation: mean
-          operator: ">="
-          threshold: 30
-
-    - id: away_win
-      label: "Wygrana gości"
-      enabled: true
-      conditions:
-        - metric: "Win"
-          side: away
-          operator: ">="
-          threshold: 60
-        - metric: "Lose"
-          side: home
-          operator: ">="
-          threshold: 30
-
-    - id: home_win_over_1_5
-      label: "Wygrana gospodarzy i powyżej 1,5 gola"
-      enabled: true
-      conditions:
-        - metric: "Win and Over 1.5 goals"
-          side: home
-          operator: ">="
-          threshold: 55
-
-    - id: away_win_over_1_5
-      label: "Wygrana gości i powyżej 1,5 gola"
-      enabled: true
-      conditions:
-        - metric: "Win and Over 1.5 goals"
-          side: away
-          operator: ">="
-          threshold: 55
-
-    - id: home_leads_half
-      label: "Gospodarze prowadzą do przerwy"
-      enabled: true
-      conditions:
-        - metric: "Team win first half"
-          side: home
-          operator: ">="
-          threshold: 50
-
-    - id: away_leads_half
-      label: "Goście prowadzą do przerwy"
-      enabled: true
-      conditions:
-        - metric: "Team win first half"
-          side: away
-          operator: ">="
-          threshold: 50
-
-    - id: draw_half
-      label: "Remis do przerwy"
-      enabled: true
-      conditions:
-        - metric: "Team draw at half time"
-          aggregation: mean
-          operator: ">="
-          threshold: 40
-
-    - id: home_home
-      label: "Gospodarze prowadzą do przerwy i wygrywają mecz"
-      enabled: true
-      conditions:
-        - metric: "Win HT - Win FT"
-          side: home
-          operator: ">="
-          threshold: 40
-
-    - id: away_away
-      label: "Goście prowadzą do przerwy i wygrywają mecz"
-      enabled: true
-      conditions:
-        - metric: "Win HT - Win FT"
-          side: away
-          operator: ">="
-          threshold: 40
+    - {id: avg_scored, label: "Średnia bramek zdobytych", enabled: true, conditions: [{metric: "Goals scored per game", aggregation: mean, operator: ">=", threshold: 1.5}]}
+    - {id: avg_conceded, label: "Średnia bramek straconych", enabled: true, conditions: [{metric: "Goals conceded per game", aggregation: mean, operator: ">=", threshold: 1.2}]}
+    - {id: clean_sheets, label: "Czyste konto", enabled: true, conditions: [{metric: "Clean sheets", aggregation: mean, operator: ">=", threshold: 50}]}
+    - {id: team_scored, label: "Drużyna strzeli gola", enabled: true, conditions: [{metric: "Team scored", aggregation: min, operator: ">=", threshold: 70}]}
+    - {id: team_scored_twice, label: "Drużyna strzeli minimum dwa razy", enabled: true, conditions: [{metric: "Team scored twice", aggregation: mean, operator: ">=", threshold: 50}]}
+    - {id: scored_both_halves, label: "Drużyna strzeli w obu połowach", enabled: true, conditions: [{metric: "Scored in both halves", aggregation: mean, operator: ">=", threshold: 40}]}
+    - {id: goal_both_halves, label: "Gol w obu połowach", enabled: true, conditions: [{metric: "Goal in both halves", aggregation: mean, operator: ">=", threshold: 55}]}
+    - {id: home_win, label: "Wygra A", enabled: true, conditions: [{metric: "Win", side: home, operator: ">=", threshold: 55}]}
+    - {id: draw, label: "Remis", enabled: true, conditions: [{metric: "Draw", aggregation: mean, operator: ">=", threshold: 30}]}
+    - {id: away_win, label: "Wygra B", enabled: true, conditions: [{metric: "Win", side: away, operator: ">=", threshold: 55}]}
+    - {id: win_over15, label: "Wygra i powyżej 1,5 gola", enabled: true, conditions: [{metric: "Win and Over 1.5 goals", aggregation: mean, operator: ">=", threshold: 50}]}
+    - {id: lose_over15, label: "Przegra i powyżej 1,5 gola", enabled: true, conditions: [{metric: "Lose and Over 1.5 goals", aggregation: mean, operator: ">=", threshold: 25}]}
+    - {id: home_win_ht, label: "Wygra A w 1. połowie", enabled: true, conditions: [{metric: "Team win first half", side: home, operator: ">=", threshold: 45}]}
+    - {id: draw_ht, label: "Remis w 1. połowie", enabled: true, conditions: [{metric: "Team draw at half time", aggregation: mean, operator: ">=", threshold: 35}]}
+    - {id: away_win_ht, label: "Wygra B w 1. połowie", enabled: true, conditions: [{metric: "Team win first half", side: away, operator: ">=", threshold: 45}]}
+    - {id: btts, label: "Obie drużyny strzelą", enabled: true, conditions: [{metric: "Both Teams to Score", aggregation: mean, operator: ">=", threshold: 55}]}
+    - {id: btts_ht1, label: "Obie drużyny strzelą w 1. połowie", enabled: true, conditions: [{metric: "BTTS in first-half", aggregation: mean, operator: ">=", threshold: 25}]}
+    - {id: btts_ht2, label: "Obie drużyny strzelą w 2. połowie", enabled: true, conditions: [{metric: "BBTS in second-half", aggregation: mean, operator: ">=", threshold: 30}]}
+    - {id: btts_over15, label: "Obie drużyny strzelą i powyżej 1,5 gola", enabled: true, conditions: [{metric: "BBTS and Over 1.5", aggregation: mean, operator: ">=", threshold: 50}]}
+    - {id: btts_over25, label: "Obie drużyny strzelą i powyżej 2,5 gola", enabled: true, conditions: [{metric: "BBTS and Over 2.5", aggregation: mean, operator: ">=", threshold: 40}]}
+    - {id: home_win_btts, label: "Wygra A i obie drużyny strzelą", enabled: true, conditions: [{metric: "Win and BTTS", side: home, operator: ">=", threshold: 30}]}
+    - {id: draw_btts, label: "Remis i obie drużyny strzelą", enabled: true, conditions: [{metric: "Draw and BTTS", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: away_win_btts, label: "Wygra B i obie drużyny strzelą", enabled: true, conditions: [{metric: "Win and BTTS", side: away, operator: ">=", threshold: 30}]}
+    - {id: total0, label: "Suma goli: 0", enabled: true, conditions: [{metric: "Match total goals 0", aggregation: mean, operator: ">=", threshold: 15}]}
+    - {id: total1, label: "Suma goli: 1", enabled: true, conditions: [{metric: "Match total goals 1", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: total2, label: "Suma goli: 2", enabled: true, conditions: [{metric: "Match total goals 2", aggregation: mean, operator: ">=", threshold: 25}]}
+    - {id: total3, label: "Suma goli: 3", enabled: true, conditions: [{metric: "Match total goals 3", aggregation: mean, operator: ">=", threshold: 25}]}
+    - {id: total4, label: "Suma goli: 4", enabled: true, conditions: [{metric: "Match total goals 4", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: total01, label: "Suma goli: 0–1", enabled: true, conditions: [{metric: "Match total goals 0 or 1", aggregation: mean, operator: ">=", threshold: 30}]}
+    - {id: total23, label: "Suma goli: 2–3", enabled: true, conditions: [{metric: "Match total goals 2 or 3", aggregation: mean, operator: ">=", threshold: 50}]}
+    - {id: total4plus, label: "Suma goli: 4+", enabled: true, conditions: [{metric: "Match total goals 4+", aggregation: mean, operator: ">=", threshold: 25}]}
+    - {id: over15, label: "Powyżej 1,5 gola", enabled: true, conditions: [{metric: "Over 1.5 goals", aggregation: min, operator: ">=", threshold: 70}]}
+    - {id: over25, label: "Powyżej 2,5 gola", enabled: true, conditions: [{metric: "Over 2.5 goals", aggregation: mean, operator: ">=", threshold: 60}]}
+    - {id: over35, label: "Powyżej 3,5 gola", enabled: true, conditions: [{metric: "Over 3.5 goals", aggregation: mean, operator: ">=", threshold: 40}]}
+    - {id: under15, label: "Poniżej 1,5 gola", enabled: true, conditions: [{metric: "Under 1.5 goals", aggregation: mean, operator: ">=", threshold: 30}]}
+    - {id: under25, label: "Poniżej 2,5 gola", enabled: true, conditions: [{metric: "Under 2.5 goals", aggregation: mean, operator: ">=", threshold: 55}]}
+    - {id: under35, label: "Poniżej 3,5 gola", enabled: true, conditions: [{metric: "Under 3.5 goals", aggregation: min, operator: ">=", threshold: 60}]}
+    - {id: over05ht, label: "Powyżej 0,5 gola w 1. połowie", enabled: true, conditions: [{metric: "Over 0.5 goals at half-time", aggregation: min, operator: ">=", threshold: 65}]}
+    - {id: over15ht, label: "Powyżej 1,5 gola w 1. połowie", enabled: true, conditions: [{metric: "Over 1.5 goals at half-time", aggregation: mean, operator: ">=", threshold: 40}]}
+    - {id: over25ht, label: "Powyżej 2,5 gola w 1. połowie", enabled: true, conditions: [{metric: "Over 2.5 goals at half-time", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: win_win, label: "Wygrana do przerwy – wygrana na koniec", enabled: true, conditions: [{metric: "Win HT - Win FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: win_draw, label: "Wygrana do przerwy – remis na koniec", enabled: true, conditions: [{metric: "Win HT - Draw FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: win_lose, label: "Wygrana do przerwy – porażka na koniec", enabled: true, conditions: [{metric: "Win HT - Lose FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: draw_win, label: "Remis do przerwy – wygrana na koniec", enabled: true, conditions: [{metric: "Draw HT - Win FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: draw_draw, label: "Remis do przerwy – remis na koniec", enabled: true, conditions: [{metric: "Draw HT - Draw FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: draw_lose, label: "Remis do przerwy – porażka na koniec", enabled: true, conditions: [{metric: "Draw HT - Lose FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: lose_win, label: "Porażka do przerwy – wygrana na koniec", enabled: true, conditions: [{metric: "Lose HT - Win FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: lose_draw, label: "Porażka do przerwy – remis na koniec", enabled: true, conditions: [{metric: "Lose HT - Draw FT", aggregation: mean, operator: ">=", threshold: 20}]}
+    - {id: lose_lose, label: "Porażka do przerwy – porażka na koniec", enabled: true, conditions: [{metric: "Lose HT - Lose FT", aggregation: mean, operator: ">=", threshold: 20}]}
