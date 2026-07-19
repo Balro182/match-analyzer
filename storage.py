@@ -9,6 +9,7 @@ from typing import Any
 from engine import ALGORITHM_VERSION
 
 DB_PATH = Path(__file__).with_name("predictions.db")
+DEFAULT_PROFILE_NAME = "Domyślny"
 
 
 def _connect() -> sqlite3.Connection:
@@ -51,11 +52,82 @@ def init_db() -> None:
             )
             """
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prediction_profiles (
+                name TEXT PRIMARY KEY,
+                config_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
         existing = _columns(con)
         if "algorithm_version" not in existing:
             con.execute("ALTER TABLE saved_matches ADD COLUMN algorithm_version TEXT")
         if "config_version" not in existing:
             con.execute("ALTER TABLE saved_matches ADD COLUMN config_version TEXT")
+
+
+def load_prediction_config() -> dict[str, Any] | None:
+    """Wczytuje aktywną, trwale zapisaną konfigurację progów."""
+    init_db()
+    with _connect() as con:
+        row = con.execute(
+            "SELECT config_json FROM prediction_profiles WHERE is_active=1 ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        value = json.loads(row["config_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def prediction_profile_info() -> dict[str, Any] | None:
+    init_db()
+    with _connect() as con:
+        row = con.execute(
+            "SELECT name, updated_at FROM prediction_profiles WHERE is_active=1 ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def save_prediction_config(config: dict[str, Any], name: str = DEFAULT_PROFILE_NAME) -> tuple[bool, str]:
+    """Zapisuje cały zestaw progów i trybów jako aktywną konfigurację domyślną."""
+    init_db()
+    normalized_name = (name or DEFAULT_PROFILE_NAME).strip() or DEFAULT_PROFILE_NAME
+    payload = json.dumps(config, ensure_ascii=False)
+    updated_at = datetime.now(timezone.utc).isoformat()
+    try:
+        with _connect() as con:
+            con.execute("UPDATE prediction_profiles SET is_active=0")
+            con.execute(
+                """
+                INSERT INTO prediction_profiles (name, config_json, updated_at, is_active)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(name) DO UPDATE SET
+                    config_json=excluded.config_json,
+                    updated_at=excluded.updated_at,
+                    is_active=1
+                """,
+                (normalized_name, payload, updated_at),
+            )
+        return True, "Progi i tryby zostały zapisane na stałe. Będą wczytywane po ponownym uruchomieniu aplikacji."
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        return False, f"Nie udało się zapisać progów: {exc}"
+
+
+def reset_prediction_config() -> tuple[bool, str]:
+    """Wyłącza trwały profil; przy następnym wczytaniu używany jest config.yaml."""
+    init_db()
+    try:
+        with _connect() as con:
+            con.execute("UPDATE prediction_profiles SET is_active=0")
+        return True, "Przywrócono wartości domyślne z config.yaml."
+    except sqlite3.Error as exc:
+        return False, f"Nie udało się przywrócić konfiguracji: {exc}"
 
 
 def save_match(snapshot: dict[str, Any]) -> tuple[bool, str]:
