@@ -109,6 +109,23 @@ def ranking_values(item: dict) -> tuple[float, int, float]:
     return max(scores), len(matched), sum(top_scores) / len(top_scores)
 
 
+def recalculate_settlement(row: dict) -> list[dict]:
+    snapshot = json.loads(row["snapshot_json"])
+    return settle_recommendations(
+        snapshot.get("recommendations", []),
+        int(row["home_ft"]),
+        int(row["away_ft"]),
+        None if row.get("home_ht") is None else int(row["home_ht"]),
+        None if row.get("away_ht") is None else int(row["away_ht"]),
+    )
+
+
+def display_value(value: bool | None) -> str:
+    if value is None:
+        return "BRAK DANYCH"
+    return "TAK" if value else "NIE"
+
+
 base_config = load_config()
 st.title("⚽ Analizator meczów")
 st.caption("Predykcje przedmeczowe, zapis do weryfikacji, rozliczanie wyników i kalibracja progów.")
@@ -138,7 +155,7 @@ with analysis_tab:
             1,
             100,
             10,
-            help="Aplikacja najpierw analizuje całą pulę, a następnie pokazuje wskazaną liczbę najwyżej ocenionych spotkań.",
+            help="Najpierw analizowana jest cała pula, a potem pokazywane są najlepsze mecze.",
         )
         min_score = st.slider(
             "Minimalny wynik predykcji",
@@ -149,7 +166,6 @@ with analysis_tab:
         require_passed = st.checkbox(
             "Wymagaj spełnienia wszystkich warunków predykcji",
             value=True,
-            help="Po wyłączeniu wystarczy osiągnięcie minimalnego wyniku zgodności.",
         )
         current_config = runtime_config(base_config)
 
@@ -187,11 +203,6 @@ with analysis_tab:
     m1.metric("Wszystkie spotkania w terminie", len(listing))
     m2.metric("Spotkania po filtrach wstępnych", len(filtered))
     m3.metric("Maksymalnie wyświetlanych", min(display_limit, len(filtered)))
-
-    st.info(
-        "Po kliknięciu aplikacja pobierze statystyki dla wszystkich spotkań pozostałych po filtrach kraju, ligi i drużyny. "
-        "Dopiero po pełnej analizie odrzuci mecze niespełniające progów i utworzy ranking najlepszych wyników."
-    )
 
     if st.button(
         "Przeanalizuj wszystkie spotkania z wybranego zakresu",
@@ -246,16 +257,12 @@ with analysis_tab:
         r2.metric("Spełniające wymagania", st.session_state["analysis_qualifying_count"])
         r3.metric("Wyświetlone najlepsze", len(results))
 
-    if "analysis_all_count" in st.session_state and not results:
-        st.warning("Żadne spotkanie nie spełniło ustawionych progów i wymagań.")
-
     for index, item in enumerate(results):
         match = item["match"]
         ranking = item.get("ranking", {})
         with st.expander(
             f"{index + 1}. {match.get('match_date') or match.get('listing_date')} | "
-            f"{match['home_team']} – {match['away_team']} | "
-            f"najlepszy wynik {ranking.get('best_score', 0):.0f}"
+            f"{match['home_team']} – {match['away_team']} | najlepszy wynik {ranking.get('best_score', 0):.0f}"
         ):
             st.write(
                 f"**Kraj:** {match.get('country') or 'brak danych'}  \n"
@@ -263,9 +270,7 @@ with analysis_tab:
                 f"**Liczba predykcji spełniających filtr:** {ranking.get('matched_count', 0)}"
             )
             table = prediction_table(item)
-            shown = table[table["Spełnia filtr"] == "TAK"].sort_values(
-                "Wynik zgodności", ascending=False
-            )
+            shown = table[table["Spełnia filtr"] == "TAK"].sort_values("Wynik zgodności", ascending=False)
             st.dataframe(shown, use_container_width=True, hide_index=True)
             with st.expander("Pokaż wszystkie predykcje dla tego meczu"):
                 st.dataframe(table, use_container_width=True, hide_index=True)
@@ -283,22 +288,14 @@ with pending_tab:
             snapshot = json.loads(row["snapshot_json"])
             st.dataframe(prediction_table(snapshot), use_container_width=True, hide_index=True)
             col1, col2 = st.columns(2)
-            home_ft = col1.number_input(
-                f"Gole: {row['home_team']}", min_value=0, max_value=30, step=1, key=f"hft_{row['id']}"
-            )
-            away_ft = col2.number_input(
-                f"Gole: {row['away_team']}", min_value=0, max_value=30, step=1, key=f"aft_{row['id']}"
-            )
+            home_ft = col1.number_input(f"Gole: {row['home_team']}", min_value=0, max_value=30, step=1, key=f"hft_{row['id']}")
+            away_ft = col2.number_input(f"Gole: {row['away_team']}", min_value=0, max_value=30, step=1, key=f"aft_{row['id']}")
             include_ht = st.checkbox("Podaj także wynik do przerwy", key=f"iht_{row['id']}")
             home_ht = away_ht = None
             if include_ht:
                 h1, h2 = st.columns(2)
-                home_ht = h1.number_input(
-                    f"Do przerwy: {row['home_team']}", min_value=0, max_value=20, step=1, key=f"hht_{row['id']}"
-                )
-                away_ht = h2.number_input(
-                    f"Do przerwy: {row['away_team']}", min_value=0, max_value=20, step=1, key=f"aht_{row['id']}"
-                )
+                home_ht = h1.number_input(f"Do przerwy: {row['home_team']}", min_value=0, max_value=20, step=1, key=f"hht_{row['id']}")
+                away_ht = h2.number_input(f"Do przerwy: {row['away_team']}", min_value=0, max_value=20, step=1, key=f"aht_{row['id']}")
             b1, b2 = st.columns(2)
             if b1.button("Rozlicz predykcje", type="primary", key=f"settle_{row['id']}"):
                 settlement = settle_recommendations(
@@ -325,34 +322,37 @@ with pending_tab:
 with history_tab:
     settled = list_matches("rozliczony")
     st.subheader("Historia rozliczonych meczów")
+    st.caption("Oceniane są wyłącznie pozycje oznaczone jako TYPUJEMY. BRAK TYPU nie jest ani trafieniem, ani błędem.")
     all_rows = []
     for row in settled:
-        settlement = json.loads(row["settlement_json"] or "[]")
+        settlement = recalculate_settlement(row)
+        active = [item for item in settlement if item["result"] in {"trafiona", "nietrafiona"}]
+        hits = sum(item["result"] == "trafiona" for item in active)
+        misses = sum(item["result"] == "nietrafiona" for item in active)
         with st.expander(
-            f"{row['match_date']} | {row['home_team']} {row['home_ft']}:{row['away_ft']} {row['away_team']}"
+            f"{row['match_date']} | {row['home_team']} {row['home_ft']}:{row['away_ft']} {row['away_team']} | "
+            f"typy: {len(active)}, trafione: {hits}, nietrafione: {misses}"
         ):
-            frame = pd.DataFrame(settlement)
-            if not frame.empty:
-                frame = frame.rename(
-                    columns={
-                        "label": "Predykcja",
-                        "score": "Wynik zgodności",
-                        "predicted": "Przewidywana",
-                        "actual": "Rzeczywista",
-                        "result": "Ocena",
-                    }
-                )
-                st.dataframe(
-                    frame[["Predykcja", "Wynik zgodności", "Przewidywana", "Rzeczywista", "Ocena"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            show_no_type = st.checkbox("Pokaż także pozycje bez typu", value=False, key=f"show_no_type_{row['id']}")
+            visible = settlement if show_no_type else [item for item in settlement if item["result"] != "brak typu"]
+            display_rows = [
+                {
+                    "Predykcja": item["label"],
+                    "Wynik zgodności": item["score"],
+                    "Decyzja przed meczem": "TYPUJEMY" if item["predicted"] else "BRAK TYPU",
+                    "Zdarzenie wystąpiło": display_value(item["actual"]),
+                    "Ocena": item["result"],
+                }
+                for item in visible
+            ]
+            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
             for item in settlement:
                 all_rows.append(
                     {
                         "Mecz": f"{row['home_team']} – {row['away_team']}",
                         "Predykcja": item["label"],
                         "Wynik zgodności": item["score"],
+                        "Decyzja": "TYPUJEMY" if item["predicted"] else "BRAK TYPU",
                         "Ocena": item["result"],
                     }
                 )
@@ -368,27 +368,22 @@ with calibration_tab:
     settled = list_matches("rozliczony")
     records = []
     for row in settled:
-        for item in json.loads(row["settlement_json"] or "[]"):
+        for item in recalculate_settlement(row):
             if item["result"] in {"trafiona", "nietrafiona"}:
                 records.append(item)
     if not records:
-        st.info("Kalibracja pojawi się po rozliczeniu pierwszych meczów.")
+        st.info("Kalibracja pojawi się po rozliczeniu pierwszych aktywnych typów.")
     else:
         frame = pd.DataFrame(records)
         frame["trafiona"] = frame["result"].eq("trafiona")
         summary = (
             frame.groupby("label")
-            .agg(
-                Typy=("trafiona", "size"),
-                Trafione=("trafiona", "sum"),
-                Średni_wynik=("score", "mean"),
-            )
+            .agg(Typy=("trafiona", "size"), Trafione=("trafiona", "sum"), Średni_wynik=("score", "mean"))
             .reset_index()
         )
+        summary["Nietrafione"] = summary["Typy"] - summary["Trafione"]
         summary["Skuteczność %"] = (summary["Trafione"] / summary["Typy"] * 100).round(1)
-        summary = summary.rename(
-            columns={"label": "Predykcja", "Średni_wynik": "Średni wynik zgodności"}
-        )
+        summary = summary.rename(columns={"label": "Predykcja", "Średni_wynik": "Średni wynik zgodności"})
         st.dataframe(
             summary.sort_values(["Skuteczność %", "Typy"], ascending=[False, False]),
             use_container_width=True,
@@ -409,13 +404,9 @@ with calibration_tab:
                     }
                 )
         st.dataframe(pd.DataFrame(threshold_rows), use_container_width=True, hide_index=True)
-        st.caption(
-            "Wnioski są wiarygodniejsze przy większej liczbie rozliczonych typów. "
-            "Nie należy optymalizować progu na kilku spotkaniach."
-        )
+        st.caption("Kalibracja obejmuje wyłącznie aktywne typy, nigdy pozycje oznaczone jako BRAK TYPU.")
 
 st.warning(
     "Dane są przechowywane w lokalnej bazie SQLite aplikacji. Na Streamlit Community Cloud mogą zostać utracone "
-    "podczas przebudowy lub przeniesienia aplikacji. Do pełnej trwałości potrzebna będzie zewnętrzna baza, "
-    "np. Supabase lub PostgreSQL."
+    "podczas przebudowy lub przeniesienia aplikacji. Do pełnej trwałości potrzebna będzie zewnętrzna baza."
 )
