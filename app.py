@@ -180,24 +180,43 @@ with analysis_tab:
         st.warning(f"Źródło nie udostępnia stron dla dat: {unsupported_text}.")
 
     countries = sorted({match.country for match in listing if match.country})
-    c1, c2, c3 = st.columns(3)
-    country = c1.selectbox("Kraj", ["Wszystkie"] + countries)
-    leagues = sorted(
+    selected_countries = st.multiselect(
+        "Kraje",
+        options=countries,
+        default=[],
+        placeholder="Brak zaznaczenia = wszystkie kraje",
+        help="Możesz zaznaczyć dowolną liczbę krajów. Brak zaznaczenia oznacza wszystkie kraje.",
+    )
+
+    available_leagues = sorted(
         {
             match.league
             for match in listing
-            if match.league and (country == "Wszystkie" or match.country == country)
+            if match.league
+            and (not selected_countries or match.country in selected_countries)
         }
     )
-    league = c2.selectbox("Liga", ["Wszystkie"] + leagues)
-    search = c3.text_input("Wyszukaj drużynę")
+    selected_leagues = st.multiselect(
+        "Ligi",
+        options=available_leagues,
+        default=[],
+        placeholder="Brak zaznaczenia = wszystkie ligi z wybranych krajów",
+        help="Lista lig jest ograniczana do zaznaczonych krajów. Brak zaznaczenia oznacza wszystkie dostępne ligi.",
+    )
+    search = st.text_input("Wyszukaj drużynę")
+
     filtered = [
         match
         for match in listing
-        if (country == "Wszystkie" or match.country == country)
-        and (league == "Wszystkie" or match.league == league)
+        if (not selected_countries or match.country in selected_countries)
+        and (not selected_leagues or match.league in selected_leagues)
         and (not search or search.casefold() in f"{match.home_team} {match.away_team}".casefold())
     ]
+
+    f1, f2, f3 = st.columns(3)
+    f1.metric("Zaznaczone kraje", len(selected_countries) if selected_countries else len(countries))
+    f2.metric("Zaznaczone ligi", len(selected_leagues) if selected_leagues else len(available_leagues))
+    f3.metric("Spotkania po filtrach", len(filtered))
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Wszystkie spotkania w terminie", len(listing))
