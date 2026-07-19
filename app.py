@@ -277,3 +277,5 @@ st.info(
     "Weryfikacja historyczna: wybierz wczoraj lub przedwczoraj, uruchom analizę i porównaj rekomendacje z końcowymi wynikami meczów. "
     "Obecne źródło udostępnia w widoku dziennym ograniczone okno dat; aplikacja nie udaje dostępu do starszych danych, których strona nie publikuje pod stałym adresem."
 )
+
+# Wymuszenie spójnego ponownego wdrożenia po aktualizacji parsera dat.
