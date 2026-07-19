@@ -83,6 +83,21 @@ def _find_metric(stats: dict[str, dict[str, float]], requested: str) -> dict[str
     return None
 
 
+def condition_scope(condition: dict[str, Any]) -> str:
+    side = condition.get("side")
+    if side == "home":
+        return "Gospodarze (A)"
+    if side == "away":
+        return "Goście (B)"
+    aggregation = condition.get("aggregation", "mean")
+    return {
+        "mean": "Średnia obu drużyn",
+        "sum": "Suma wartości obu drużyn",
+        "min": "Niższa wartość z obu drużyn",
+        "max": "Wyższa wartość z obu drużyn",
+    }.get(aggregation, "Średnia obu drużyn")
+
+
 def _condition_value(metric: dict[str, float], condition: dict[str, Any]) -> float:
     side = condition.get("side")
     if side in {"home", "away"}:
@@ -105,9 +120,10 @@ def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
     for condition in conditions:
         metric_name = condition["metric"]
         translated_name = metric_label(metric_name)
+        scope = condition_scope(condition)
         metric = _find_metric(stats, metric_name)
         if metric is None:
-            reasons.append(f"Brak danych dla statystyki: {translated_name}")
+            reasons.append(f"{scope} — brak danych dla statystyki: {translated_name}")
             continue
         value = _condition_value(metric, condition)
         op_text = condition.get("operator", ">=")
@@ -115,7 +131,7 @@ def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
         passed = OPS[op_text](value, threshold)
         passed_count += int(passed)
         reasons.append(
-            f"{translated_name}: {value:.2f} {op_text} {threshold:g} — "
+            f"{scope} — {translated_name}: {value:.2f} {op_text} {threshold:g} — "
             f"{'warunek spełniony' if passed else 'warunek niespełniony'}"
         )
     score = 100.0 * passed_count / len(conditions) if conditions else 0.0
