@@ -83,59 +83,59 @@ def _find_metric(stats: dict[str, dict[str, float]], requested: str) -> dict[str
     return None
 
 
-def condition_scope(condition: dict[str, Any]) -> str:
-    side = condition.get("side")
-    if side == "home":
-        return "Gospodarze (A)"
-    if side == "away":
-        return "Goście (B)"
-    aggregation = condition.get("aggregation", "mean")
-    return {
-        "mean": "Średnia obu drużyn",
-        "sum": "Suma wartości obu drużyn",
-        "min": "Niższa wartość z obu drużyn",
-        "max": "Wyższa wartość z obu drużyn",
-    }.get(aggregation, "Średnia obu drużyn")
-
-
-def _condition_value(metric: dict[str, float], condition: dict[str, Any]) -> float:
-    side = condition.get("side")
-    if side in {"home", "away"}:
-        return float(metric[side])
-    values = [float(metric["home"]), float(metric["away"])]
-    aggregation = condition.get("aggregation", "mean")
-    if aggregation == "min":
-        return min(values)
-    if aggregation == "max":
-        return max(values)
-    if aggregation == "sum":
-        return sum(values)
-    return sum(values) / len(values)
+def _legacy_thresholds(condition: dict[str, Any]) -> tuple[float, float]:
+    threshold = float(condition.get("threshold", 0))
+    return float(condition.get("threshold_home", threshold)), float(condition.get("threshold_away", threshold))
 
 
 def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
     conditions = rule.get("conditions", [])
-    passed_count = 0
     reasons: list[str] = []
+    passed_checks = 0
+    total_checks = 0
+    combine = bool(rule.get("combine", False))
+
     for condition in conditions:
         metric_name = condition["metric"]
         translated_name = metric_label(metric_name)
-        scope = condition_scope(condition)
         metric = _find_metric(stats, metric_name)
         if metric is None:
-            reasons.append(f"{scope} — brak danych dla statystyki: {translated_name}")
+            reasons.append(f"Brak danych dla statystyki: {translated_name}")
+            total_checks += 1 if combine else 2
             continue
-        value = _condition_value(metric, condition)
+
+        home_value = float(metric["home"])
+        away_value = float(metric["away"])
+        threshold_home, threshold_away = _legacy_thresholds(condition)
         op_text = condition.get("operator", ">=")
-        threshold = float(condition["threshold"])
-        passed = OPS[op_text](value, threshold)
-        passed_count += int(passed)
-        reasons.append(
-            f"{scope} — {translated_name}: {value:.2f} {op_text} {threshold:g} — "
-            f"{'warunek spełniony' if passed else 'warunek niespełniony'}"
-        )
-    score = 100.0 * passed_count / len(conditions) if conditions else 0.0
-    return Recommendation(rule["id"], rule["label"], score, bool(conditions) and passed_count == len(conditions), reasons)
+        op = OPS[op_text]
+
+        if combine:
+            value = (home_value + away_value) / 2
+            threshold = (threshold_home + threshold_away) / 2
+            passed = op(value, threshold)
+            total_checks += 1
+            passed_checks += int(passed)
+            reasons.append(
+                f"Średnia A+B — {translated_name}: ({home_value:.2f} + {away_value:.2f}) / 2 = {value:.2f} "
+                f"{op_text} średni próg {threshold:g} — {'warunek spełniony' if passed else 'warunek niespełniony'}"
+            )
+        else:
+            home_passed = op(home_value, threshold_home)
+            away_passed = op(away_value, threshold_away)
+            total_checks += 2
+            passed_checks += int(home_passed) + int(away_passed)
+            reasons.append(
+                f"Drużyna A — {translated_name}: {home_value:.2f} {op_text} {threshold_home:g} — "
+                f"{'warunek spełniony' if home_passed else 'warunek niespełniony'}"
+            )
+            reasons.append(
+                f"Drużyna B — {translated_name}: {away_value:.2f} {op_text} {threshold_away:g} — "
+                f"{'warunek spełniony' if away_passed else 'warunek niespełniony'}"
+            )
+
+    score = 100.0 * passed_checks / total_checks if total_checks else 0.0
+    return Recommendation(rule["id"], rule["label"], score, total_checks > 0 and passed_checks == total_checks, reasons)
 
 
 def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recommendation]:
