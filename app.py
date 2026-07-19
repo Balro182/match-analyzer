@@ -63,7 +63,6 @@ def dates_between(start: date, end: date) -> tuple[date, ...]:
 
 
 def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict:
-    """Renderuje kontrolki w aktualnym kontekście sidebara — bez ponownego otwierania st.sidebar."""
     result = copy.deepcopy(base)
     result.setdefault("recommendations", {})["min_score"] = int(minimum_score)
     result["recommendations"]["min_data_quality"] = int(minimum_quality)
@@ -136,7 +135,8 @@ def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict
             clear_prediction_widget_state()
             st.success(message)
             st.rerun()
-        st.error(message)
+        else:
+            st.error(message)
     return result
 
 
@@ -220,10 +220,7 @@ with analysis_tab:
         )
         display_limit = st.slider("Liczba najlepszych spotkań", 1, 100, 10)
         min_score = st.slider(
-            "Minimalny score",
-            50,
-            150,
-            int(base_config["recommendations"].get("min_score", 100)),
+            "Minimalny score", 50, 150, int(base_config["recommendations"].get("min_score", 100))
         )
         min_quality = st.slider(
             "Minimalna jakość danych %",
@@ -268,16 +265,30 @@ with analysis_tab:
     m3.metric("Do wyświetlenia", min(display_limit, len(filtered)))
 
     if st.button("Przeanalizuj wszystkie spotkania", type="primary", disabled=not filtered):
-        with st.spinner(f"Pobieranie i analiza {len(filtered)} spotkań..."):
-            details = scrape_matches(
-                filtered,
-                delay_seconds=float(current_config.get("source", {}).get("request_delay_seconds", 0.25)),
-                session=create_session(),
+        total = len(filtered)
+        progress = st.progress(0.0, text=f"Rozpoczynanie analizy {total} spotkań...")
+        session = create_session()
+        details = []
+        delay = float(current_config.get("source", {}).get("request_delay_seconds", 0.25))
+
+        for index, summary in enumerate(filtered, 1):
+            progress.progress(
+                0.70 * ((index - 1) / total),
+                text=f"Pobieranie {index}/{total}: {summary.home_team} – {summary.away_team}",
+            )
+            details.extend(scrape_matches([summary], delay_seconds=delay, session=session))
+            progress.progress(
+                0.70 * (index / total),
+                text=f"Pobrano {index}/{total}: {summary.home_team} – {summary.away_team}",
             )
 
         all_results = []
         failed = 0
-        for match in details:
+        for index, match in enumerate(details, 1):
+            progress.progress(
+                0.70 + 0.30 * ((index - 1) / total),
+                text=f"Analiza {index}/{total}: {match.home_team} – {match.away_team}",
+            )
             match_dict = match.to_dict()
             if match.errors or not match.stats:
                 failed += 1
@@ -295,6 +306,10 @@ with analysis_tab:
             best, count, average = ranking_values(item)
             item["ranking"] = {"best_score": best, "matched_count": count, "top_average": average}
             all_results.append(item)
+            progress.progress(
+                0.70 + 0.30 * (index / total),
+                text=f"Przeanalizowano {index}/{total}: {match.home_team} – {match.away_team}",
+            )
 
         qualifying = [item for item in all_results if matching_recommendations(item)]
         qualifying.sort(
@@ -309,6 +324,7 @@ with analysis_tab:
         st.session_state["analysis_failed_count"] = failed
         st.session_state["analysis_qualifying_count"] = len(qualifying)
         st.session_state["analysis_results"] = qualifying[:display_limit]
+        progress.progress(1.0, text=f"Gotowe: przeanalizowano {total} spotkań.")
 
     results = st.session_state.get("analysis_results", [])
     if "analysis_all_count" in st.session_state:
