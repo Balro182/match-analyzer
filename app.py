@@ -9,10 +9,10 @@ import pandas as pd
 import streamlit as st
 import yaml
 
-from engine import analyze_match, metric_label
+from engine import ALGORITHM_VERSION, analyze_match, metric_label
 from scraper import create_session, list_matches_for_dates, scrape_matches
-from settlement import settle_recommendations
-from storage import delete_match, init_db, list_matches, save_match, settle_match
+from settlement import settle_recommendations, validate_scoreline
+from storage import delete_match, init_db, list_matches, reprocess_match, save_match, settle_match
 
 ROOT = Path(__file__).parent
 st.set_page_config(page_title="Analizator meczów", page_icon="⚽", layout="wide")
@@ -22,7 +22,7 @@ MODE_LABELS = {
     "both": "Obie drużyny muszą spełnić próg",
     "any": "Wystarczy jedna drużyna",
     "mean": "Średnia obu drużyn",
-    "special": "Stała formuła specjalna",
+    "special": "Stała formuła rynku",
 }
 
 
@@ -44,52 +44,36 @@ def runtime_config(base: dict) -> dict:
     result = copy.deepcopy(base)
     with st.sidebar:
         st.subheader("Progi i tryby predykcji")
-        st.caption(
-            "Każda statystyka ma próg A i B. Tryb określa, czy próg muszą spełnić obie drużyny, "
-            "wystarczy jedna, czy porównywana jest średnia. Progi zerowe są zablokowane."
-        )
+        st.caption("Score 100 oznacza osiągnięcie progu; wartości powyżej 100 oznaczają zapas ponad próg.")
         for rule_index, rule in enumerate(result["recommendations"]["rules"]):
             with st.expander(rule["label"]):
                 rule["enabled"] = st.checkbox(
-                    "Predykcja aktywna",
-                    value=bool(rule.get("enabled", True)),
-                    key=f"enabled_{rule_index}",
+                    "Predykcja aktywna", value=bool(rule.get("enabled", True)), key=f"enabled_{rule_index}"
                 )
                 current_mode = str(rule.get("mode", "both"))
                 if current_mode == "special":
-                    st.info("Tryb: stała formuła specjalna. Dla 1X2 nie można zmienić sposobu liczenia.")
-                    rule["mode"] = "special"
+                    st.info("Tryb: stała, jednoznaczna formuła rynku")
                 else:
-                    modes = ["both", "any", "mean"]
+                    options = ["both", "any", "mean"]
                     rule["mode"] = st.selectbox(
-                        "Sposób oceny",
-                        options=modes,
-                        index=modes.index(current_mode) if current_mode in modes else 0,
-                        format_func=lambda value: MODE_LABELS[value],
-                        key=f"mode_{rule_index}",
+                        "Tryb oceny", options,
+                        index=options.index(current_mode) if current_mode in options else 0,
+                        format_func=lambda value: MODE_LABELS[value], key=f"mode_{rule_index}",
                     )
                 for condition_index, condition in enumerate(rule.get("conditions", [])):
-                    metric_name = metric_label(condition["metric"])
-                    old_threshold = float(condition.get("threshold", 1))
-                    current_home = max(float(condition.get("threshold_home", old_threshold)), 0.1)
-                    current_away = max(float(condition.get("threshold_away", old_threshold)), 0.1)
-                    is_small_scale = max(abs(current_home), abs(current_away)) < 10
-                    step = 0.1 if is_small_scale else 1.0
-                    minimum = 0.1 if is_small_scale else 1.0
-                    st.caption(f"{metric_name} {condition.get('operator', '>=')}")
+                    old = float(condition.get("threshold", 1))
+                    current_home = float(condition.get("threshold_home", old))
+                    current_away = float(condition.get("threshold_away", old))
+                    step = 0.1 if max(abs(current_home), abs(current_away)) < 10 else 1.0
+                    minimum = 0.1 if step == 0.1 else 1.0
+                    st.caption(f"{metric_label(condition['metric'])} {condition.get('operator', '>=')}")
                     col_a, col_b = st.columns(2)
                     condition["threshold_home"] = col_a.number_input(
-                        "Próg A",
-                        min_value=minimum,
-                        value=current_home,
-                        step=step,
+                        "Próg A", min_value=minimum, value=max(current_home, minimum), step=step,
                         key=f"threshold_a_{rule_index}_{condition_index}",
                     )
                     condition["threshold_away"] = col_b.number_input(
-                        "Próg B",
-                        min_value=minimum,
-                        value=current_away,
-                        step=step,
+                        "Próg B", min_value=minimum, value=max(current_away, minimum), step=step,
                         key=f"threshold_b_{rule_index}_{condition_index}",
                     )
                     condition.pop("threshold", None)
@@ -99,33 +83,36 @@ def runtime_config(base: dict) -> dict:
 
 
 def prediction_table(item: dict) -> pd.DataFrame:
-    minimum_score = float(item.get("minimum_score", 0))
-    require_passed = bool(item.get("require_passed", False))
-    return pd.DataFrame(
-        [
-            {
-                "Predykcja": recommendation["label"],
-                "Wynik zgodności": recommendation["score"],
-                "Wszystkie warunki spełnione": "TAK" if recommendation["passed"] else "NIE",
-                "Spełnia filtr": "TAK"
-                if recommendation["score"] >= minimum_score
-                and (recommendation["passed"] or not require_passed)
-                else "NIE",
-                "Uzasadnienie": " | ".join(recommendation.get("reasons", [])),
-            }
-            for recommendation in item.get("recommendations", [])
-        ]
-    )
+    minimum_score = float(item.get("minimum_score", 100))
+    minimum_quality = float(item.get("minimum_data_quality", 100))
+    require_passed = bool(item.get("require_passed", True))
+    rows = []
+    for rec in item.get("recommendations", []):
+        qualifies = (
+            float(rec.get("score", 0)) >= minimum_score
+            and float(rec.get("data_quality", 0)) >= minimum_quality
+            and (bool(rec.get("passed")) or not require_passed)
+        )
+        rows.append({
+            "Predykcja": rec.get("label"), "Score": rec.get("score"),
+            "Jakość danych %": rec.get("data_quality"), "Wartość": rec.get("raw_value"),
+            "Próg": rec.get("threshold"), "Tryb": MODE_LABELS.get(rec.get("mode"), rec.get("mode")),
+            "Warunek spełniony": "TAK" if rec.get("passed") else "NIE",
+            "Spełnia filtr": "TAK" if qualifies else "NIE",
+            "Uzasadnienie": " | ".join(rec.get("reasons", [])),
+        })
+    return pd.DataFrame(rows)
 
 
 def matching_recommendations(item: dict) -> list[dict]:
-    minimum_score = float(item.get("minimum_score", 0))
-    require_passed = bool(item.get("require_passed", False))
+    minimum_score = float(item.get("minimum_score", 100))
+    minimum_quality = float(item.get("minimum_data_quality", 100))
+    require_passed = bool(item.get("require_passed", True))
     return [
-        recommendation
-        for recommendation in item.get("recommendations", [])
-        if recommendation["score"] >= minimum_score
-        and (recommendation["passed"] or not require_passed)
+        rec for rec in item.get("recommendations", [])
+        if float(rec.get("score", 0)) >= minimum_score
+        and float(rec.get("data_quality", 0)) >= minimum_quality
+        and (bool(rec.get("passed")) or not require_passed)
     ]
 
 
@@ -134,19 +121,8 @@ def ranking_values(item: dict) -> tuple[float, int, float]:
     if not matched:
         return 0.0, 0, 0.0
     scores = sorted((float(rec["score"]) for rec in matched), reverse=True)
-    top_scores = scores[:3]
-    return max(scores), len(matched), sum(top_scores) / len(top_scores)
-
-
-def recalculate_settlement(row: dict) -> list[dict]:
-    snapshot = json.loads(row["snapshot_json"])
-    return settle_recommendations(
-        snapshot.get("recommendations", []),
-        int(row["home_ft"]),
-        int(row["away_ft"]),
-        None if row.get("home_ht") is None else int(row["home_ht"]),
-        None if row.get("away_ht") is None else int(row["away_ht"]),
-    )
+    top = scores[:3]
+    return max(scores), len(scores), sum(top) / len(top)
 
 
 def display_value(value: bool | None) -> str:
@@ -157,7 +133,7 @@ def display_value(value: bool | None) -> str:
 
 base_config = load_config()
 st.title("⚽ Analizator meczów")
-st.caption("Predykcje przedmeczowe, progi A/B, różne tryby oceny, rozliczanie wyników i kalibracja.")
+st.caption(f"Algorytm {ALGORITHM_VERSION} — predykcje, audytowalne snapshoty, rozliczanie i kalibracja.")
 analysis_tab, pending_tab, history_tab, calibration_tab = st.tabs(
     ["Analiza meczów", "Mecze do rozliczenia", "Historia", "Kalibracja progów"]
 )
@@ -167,22 +143,14 @@ with analysis_tab:
     with st.sidebar:
         st.header("Zakres analizy")
         selected_range = st.date_input(
-            "Zakres dat",
-            value=(today, today),
-            min_value=today - timedelta(days=2),
-            max_value=today + timedelta(days=2),
-            format="DD.MM.YYYY",
+            "Zakres dat", value=(today, today), min_value=today - timedelta(days=2),
+            max_value=today + timedelta(days=2), format="DD.MM.YYYY",
         )
-        start_date, end_date = (
-            selected_range
-            if isinstance(selected_range, tuple) and len(selected_range) == 2
-            else (selected_range, selected_range)
-        )
-        display_limit = st.slider("Liczba najlepszych spotkań do wyświetlenia", 1, 100, 10)
-        min_score = st.slider(
-            "Minimalny wynik predykcji", 0, 100, int(base_config["recommendations"].get("min_score", 70))
-        )
-        require_passed = st.checkbox("Wymagaj spełnienia reguły predykcji", value=True)
+        start_date, end_date = selected_range if isinstance(selected_range, tuple) and len(selected_range) == 2 else (selected_range, selected_range)
+        display_limit = st.slider("Liczba najlepszych spotkań", 1, 100, 10)
+        min_score = st.slider("Minimalny score", 50, 150, int(base_config["recommendations"].get("min_score", 100)))
+        min_quality = st.slider("Minimalna jakość danych %", 0, 100, int(base_config["recommendations"].get("min_data_quality", 100)))
+        require_passed = st.checkbox("Wymagaj spełnienia warunku rynku", value=True)
         current_config = runtime_config(base_config)
 
     try:
@@ -190,102 +158,79 @@ with analysis_tab:
     except Exception as exc:
         st.error(f"Nie udało się pobrać listy spotkań: {exc}")
         listing, unsupported = [], []
-
     if unsupported:
-        unsupported_text = ", ".join(value.strftime("%d.%m.%Y") for value in unsupported)
-        st.warning(f"Źródło nie udostępnia stron dla dat: {unsupported_text}.")
+        st.warning("Źródło nie obsługuje dat: " + ", ".join(value.strftime("%d.%m.%Y") for value in unsupported))
 
     countries = sorted({match.country for match in listing if match.country})
-    selected_countries = st.multiselect(
-        "Kraje", countries, default=[], placeholder="Brak zaznaczenia = wszystkie kraje"
-    )
-    available_leagues = sorted(
-        {
-            match.league
-            for match in listing
-            if match.league and (not selected_countries or match.country in selected_countries)
-        }
-    )
-    selected_leagues = st.multiselect(
-        "Ligi", available_leagues, default=[], placeholder="Brak zaznaczenia = wszystkie ligi"
-    )
+    selected_countries = st.multiselect("Kraje", countries, default=[], placeholder="Brak zaznaczenia = wszystkie")
+    available_leagues = sorted({match.league for match in listing if match.league and (not selected_countries or match.country in selected_countries)})
+    selected_leagues = st.multiselect("Ligi", available_leagues, default=[], placeholder="Brak zaznaczenia = wszystkie")
     search = st.text_input("Wyszukaj drużynę")
     filtered = [
-        match
-        for match in listing
+        match for match in listing
         if (not selected_countries or match.country in selected_countries)
         and (not selected_leagues or match.league in selected_leagues)
         and (not search or search.casefold() in f"{match.home_team} {match.away_team}".casefold())
     ]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Wszystkie mecze", len(listing))
+    m2.metric("Po filtrach", len(filtered))
+    m3.metric("Do wyświetlenia", min(display_limit, len(filtered)))
 
-    f1, f2, f3 = st.columns(3)
-    f1.metric("Wybrane kraje", len(selected_countries) if selected_countries else len(countries))
-    f2.metric("Wybrane ligi", len(selected_leagues) if selected_leagues else len(available_leagues))
-    f3.metric("Spotkania po filtrach", len(filtered))
-
-    if st.button("Przeanalizuj wszystkie spotkania z wybranego zakresu", type="primary", disabled=not filtered):
-        progress = st.progress(0, text="Rozpoczynanie pełnej analizy...")
-        details = []
-        for index, summary in enumerate(filtered, 1):
-            progress.progress(
-                index / len(filtered),
-                text=f"Pobieranie {index}/{len(filtered)}: {summary.home_team} – {summary.away_team}",
+    if st.button("Przeanalizuj wszystkie spotkania", type="primary", disabled=not filtered):
+        with st.spinner(f"Pobieranie i analiza {len(filtered)} spotkań w jednej sesji HTTP..."):
+            details = scrape_matches(
+                filtered,
+                delay_seconds=float(current_config.get("source", {}).get("request_delay_seconds", 0.25)),
+                session=create_session(),
             )
-            details.extend(scrape_matches([summary], delay_seconds=0))
-        progress.empty()
-
         all_results = []
+        failed = 0
         for match in details:
-            recommendations = analyze_match(match.to_dict(), current_config)
+            match_dict = match.to_dict()
+            if match.errors or not match.stats:
+                failed += 1
+            recommendations = analyze_match(match_dict, current_config)
             item = {
-                "match": match.to_dict(),
-                "recommendations": [recommendation.to_dict() for recommendation in recommendations],
+                "match": match_dict,
+                "recommendations": [rec.to_dict() for rec in recommendations],
                 "thresholds": current_config["recommendations"]["rules"],
-                "minimum_score": min_score,
-                "require_passed": require_passed,
+                "minimum_score": min_score, "minimum_data_quality": min_quality,
+                "require_passed": require_passed, "algorithm_version": ALGORITHM_VERSION,
+                "config_version": ALGORITHM_VERSION,
             }
-            best_score, matched_count, top_average = ranking_values(item)
-            item["ranking"] = {
-                "best_score": best_score,
-                "matched_count": matched_count,
-                "top_average": top_average,
-            }
+            best, count, average = ranking_values(item)
+            item["ranking"] = {"best_score": best, "matched_count": count, "top_average": average}
             all_results.append(item)
-
         qualifying = [item for item in all_results if matching_recommendations(item)]
-        qualifying.sort(
-            key=lambda item: (
-                item["ranking"]["best_score"],
-                item["ranking"]["matched_count"],
-                item["ranking"]["top_average"],
-            ),
-            reverse=True,
-        )
+        qualifying.sort(key=lambda item: (
+            item["ranking"]["best_score"], item["ranking"]["matched_count"], item["ranking"]["top_average"]
+        ), reverse=True)
         st.session_state["analysis_all_count"] = len(all_results)
+        st.session_state["analysis_failed_count"] = failed
         st.session_state["analysis_qualifying_count"] = len(qualifying)
         st.session_state["analysis_results"] = qualifying[:display_limit]
 
     results = st.session_state.get("analysis_results", [])
     if "analysis_all_count" in st.session_state:
-        r1, r2, r3 = st.columns(3)
+        r1, r2, r3, r4 = st.columns(4)
         r1.metric("Przeanalizowane", st.session_state["analysis_all_count"])
-        r2.metric("Spełniające wymagania", st.session_state["analysis_qualifying_count"])
-        r3.metric("Wyświetlone", len(results))
+        r2.metric("Błędy/brak danych", st.session_state.get("analysis_failed_count", 0))
+        r3.metric("Spełniające wymagania", st.session_state["analysis_qualifying_count"])
+        r4.metric("Wyświetlone", len(results))
 
     for index, item in enumerate(results):
         match = item["match"]
-        ranking = item.get("ranking", {})
+        ranking = item["ranking"]
         with st.expander(
             f"{index + 1}. {match.get('match_date') or match.get('listing_date')} | "
-            f"{match['home_team']} – {match['away_team']} | najlepszy wynik {ranking.get('best_score', 0):.0f}"
+            f"{match['home_team']} – {match['away_team']} | score {ranking['best_score']:.1f}"
         ):
-            st.write(
-                f"**Kraj:** {match.get('country') or 'brak danych'}  \n"
-                f"**Liga:** {match.get('league') or 'brak danych'}  \n"
-                f"**Predykcje spełniające filtr:** {ranking.get('matched_count', 0)}"
-            )
+            st.write(f"**Kraj:** {match.get('country') or 'brak'}  \n**Liga:** {match.get('league') or 'brak'}")
+            if match.get("errors"):
+                st.warning(" | ".join(match["errors"]))
             table = prediction_table(item)
-            shown = table[table["Spełnia filtr"] == "TAK"].sort_values("Wynik zgodności", ascending=False)
+            shown = table[table["Spełnia filtr"] == "TAK"].sort_values("Score", ascending=False)
             st.dataframe(shown, use_container_width=True, hide_index=True)
             with st.expander("Pokaż wszystkie predykcje"):
                 st.dataframe(table, use_container_width=True, hide_index=True)
@@ -313,16 +258,14 @@ with pending_tab:
                 away_ht = h2.number_input(f"Do przerwy: {row['away_team']}", 0, 20, key=f"aht_{row['id']}")
             b1, b2 = st.columns(2)
             if b1.button("Rozlicz predykcje", type="primary", key=f"settle_{row['id']}"):
-                settlement = settle_recommendations(
-                    snapshot["recommendations"], int(home_ft), int(away_ft),
-                    None if home_ht is None else int(home_ht), None if away_ht is None else int(away_ht),
-                )
-                settle_match(
-                    row["id"], int(home_ft), int(away_ft),
-                    None if home_ht is None else int(home_ht), None if away_ht is None else int(away_ht), settlement,
-                )
-                st.success("Mecz został rozliczony.")
-                st.rerun()
+                valid, message = validate_scoreline(int(home_ft), int(away_ft), home_ht, away_ht)
+                if not valid:
+                    st.error(message)
+                else:
+                    settlement = settle_recommendations(snapshot.get("recommendations", []), int(home_ft), int(away_ft), home_ht, away_ht)
+                    settle_match(row["id"], int(home_ft), int(away_ft), home_ht, away_ht, settlement)
+                    st.success("Mecz został rozliczony.")
+                    st.rerun()
             if b2.button("Usuń zapis", key=f"delete_{row['id']}"):
                 delete_match(row["id"])
                 st.rerun()
@@ -330,74 +273,50 @@ with pending_tab:
 with history_tab:
     settled = list_matches("rozliczony")
     st.subheader("Historia rozliczonych meczów")
-    st.caption("Oceniane są wyłącznie aktywne typy. BRAK TYPU nie wpływa na skuteczność.")
-    all_rows = []
+    st.caption("Historia jest niezmienna. Ponowne rozliczenie odbywa się wyłącznie po użyciu jawnego przycisku.")
+    export_rows = []
     for row in settled:
-        settlement = recalculate_settlement(row)
-        active = [item for item in settlement if item["result"] in {"trafiona", "nietrafiona"}]
-        hits = sum(item["result"] == "trafiona" for item in active)
-        misses = sum(item["result"] == "nietrafiona" for item in active)
+        settlement = json.loads(row.get("settlement_json") or "[]")
+        active = [item for item in settlement if item.get("result") in {"trafiona", "nietrafiona"}]
+        hits = sum(item.get("result") == "trafiona" for item in active)
         with st.expander(
             f"{row['match_date']} | {row['home_team']} {row['home_ft']}:{row['away_ft']} {row['away_team']} | "
-            f"typy: {len(active)}, trafione: {hits}, nietrafione: {misses}"
+            f"{hits}/{len(active)} | alg. {row.get('algorithm_version') or 'starszy'}"
         ):
-            show_no_type = st.checkbox("Pokaż także pozycje bez typu", False, key=f"show_{row['id']}")
-            visible = settlement if show_no_type else [item for item in settlement if item["result"] != "brak typu"]
-            display_rows = [
-                {
-                    "Predykcja": item["label"],
-                    "Wynik zgodności": item["score"],
-                    "Decyzja": "TYPUJEMY" if item["predicted"] else "BRAK TYPU",
-                    "Zdarzenie wystąpiło": display_value(item["actual"]),
-                    "Ocena": item["result"],
-                }
-                for item in visible
-            ]
+            show_no_type = st.checkbox("Pokaż brak typu", False, key=f"show_{row['id']}")
+            visible = settlement if show_no_type else [item for item in settlement if item.get("result") != "brak typu"]
+            display_rows = [{
+                "Predykcja": item.get("label"), "Score": item.get("score"),
+                "Jakość danych %": item.get("data_quality"),
+                "Decyzja": "TYPUJEMY" if item.get("predicted") else "BRAK TYPU",
+                "Zdarzenie wystąpiło": display_value(item.get("actual")), "Ocena": item.get("result"),
+            } for item in visible]
             st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+            if st.button("Przelicz aktualnym algorytmem", key=f"reprocess_{row['id']}"):
+                ok, message = reprocess_match(row["id"])
+                (st.success if ok else st.error)(message)
+                if ok:
+                    st.rerun()
             for item in settlement:
-                all_rows.append({
-                    "Mecz": f"{row['home_team']} – {row['away_team']}",
-                    "Predykcja": item["label"], "Wynik zgodności": item["score"],
-                    "Decyzja": "TYPUJEMY" if item["predicted"] else "BRAK TYPU", "Ocena": item["result"],
-                })
-    if all_rows:
-        st.download_button(
-            "Pobierz historię CSV", pd.DataFrame(all_rows).to_csv(index=False).encode("utf-8-sig"),
-            "historia_predykcji.csv", "text/csv",
-        )
+                export_rows.append({"Mecz": f"{row['home_team']} – {row['away_team']}", **item})
+    if export_rows:
+        st.download_button("Pobierz historię CSV", pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8-sig"), "historia_predykcji.csv", "text/csv")
 
 with calibration_tab:
     records = []
     for row in list_matches("rozliczony"):
-        records.extend(
-            item for item in recalculate_settlement(row) if item["result"] in {"trafiona", "nietrafiona"}
-        )
+        records.extend(item for item in json.loads(row.get("settlement_json") or "[]") if item.get("result") in {"trafiona", "nietrafiona"})
     if not records:
         st.info("Kalibracja pojawi się po rozliczeniu pierwszych aktywnych typów.")
     else:
         frame = pd.DataFrame(records)
         frame["trafiona"] = frame["result"].eq("trafiona")
         summary = frame.groupby("label").agg(
-            Typy=("trafiona", "size"), Trafione=("trafiona", "sum"), Średni_wynik=("score", "mean")
+            Typy=("trafiona", "size"), Trafione=("trafiona", "sum"), Średni_score=("score", "mean")
         ).reset_index()
         summary["Nietrafione"] = summary["Typy"] - summary["Trafione"]
         summary["Skuteczność %"] = (summary["Trafione"] / summary["Typy"] * 100).round(1)
-        summary = summary.rename(columns={"label": "Predykcja", "Średni_wynik": "Średni wynik zgodności"})
         st.dataframe(summary.sort_values(["Skuteczność %", "Typy"], ascending=[False, False]), use_container_width=True, hide_index=True)
-        chosen = st.selectbox("Predykcja do analizy progów", sorted(frame["label"].unique()))
-        subset = frame[frame["label"] == chosen]
-        rows = []
-        for threshold in range(0, 101, 5):
-            sample = subset[subset["score"] >= threshold]
-            if len(sample):
-                rows.append({
-                    "Minimalny wynik": threshold, "Liczba typów": len(sample),
-                    "Trafione": int(sample["trafiona"].sum()),
-                    "Skuteczność %": round(sample["trafiona"].mean() * 100, 1),
-                })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption("Do oceny opłacalności nadal potrzebne są kursy i ROI; sama trafialność nie mierzy wartości zakładu.")
 
-st.warning(
-    "Dane są przechowywane w lokalnej bazie SQLite aplikacji. Na Streamlit Community Cloud mogą zostać utracone "
-    "podczas przebudowy lub przeniesienia aplikacji. Do pełnej trwałości potrzebna jest zewnętrzna baza."
-)
+st.warning("SQLite jest odpowiedni lokalnie. Do trwałego wdrożenia wieloużytkownikowego należy ustawić PostgreSQL lub Supabase.")
