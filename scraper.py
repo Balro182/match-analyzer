@@ -20,55 +20,23 @@ DATE_URLS = {
     2: f"{BASE_URL}/football-stats/future-days/",
 }
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; AnalizatorMeczow/1.2; +browser-app)",
+    "User-Agent": "Mozilla/5.0 (compatible; AnalizatorMeczow/1.3; +browser-app)",
     "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
 }
 
 COUNTRY_NAMES_PL = {
-    "WORLD": "Świat",
-    "AUSTRALIA": "Australia",
-    "BELARUS": "Białoruś",
-    "BHUTAN": "Bhutan",
-    "BOLIVIA": "Boliwia",
-    "BRAZIL": "Brazylia",
-    "BULGARIA": "Bułgaria",
-    "CHILE": "Chile",
-    "CHINA": "Chiny",
-    "ECUADOR": "Ekwador",
-    "ENGLAND": "Anglia",
-    "ESTONIA": "Estonia",
-    "FINLAND": "Finlandia",
-    "FRANCE": "Francja",
-    "GERMANY": "Niemcy",
-    "ICELAND": "Islandia",
-    "IRELAND": "Irlandia",
-    "ITALY": "Włochy",
-    "KAZAKHSTAN": "Kazachstan",
-    "LATVIA": "Łotwa",
-    "LITHUANIA": "Litwa",
-    "MACAO": "Makau",
-    "MALAWI": "Malawi",
-    "MEXICO": "Meksyk",
-    "MOLDOVA": "Mołdawia",
-    "NETHERLANDS": "Holandia",
-    "NICARAGUA": "Nikaragua",
-    "PARAGUAY": "Paragwaj",
-    "PERU": "Peru",
-    "POLAND": "Polska",
-    "PORTUGAL": "Portugalia",
-    "ROMANIA": "Rumunia",
-    "RUSSIA": "Rosja",
-    "SERBIA": "Serbia",
-    "SLOVENIA": "Słowenia",
-    "SOUTH-KOREA": "Korea Południowa",
-    "SOUTH KOREA": "Korea Południowa",
-    "SPAIN": "Hiszpania",
-    "SWEDEN": "Szwecja",
-    "SWITZERLAND": "Szwajcaria",
-    "TURKEY": "Turcja",
-    "UKRAINE": "Ukraina",
-    "URUGUAY": "Urugwaj",
-    "USA": "Stany Zjednoczone",
+    "WORLD": "Świat", "AUSTRALIA": "Australia", "BELARUS": "Białoruś", "BHUTAN": "Bhutan",
+    "BOLIVIA": "Boliwia", "BRAZIL": "Brazylia", "BULGARIA": "Bułgaria", "CHILE": "Chile",
+    "CHINA": "Chiny", "ECUADOR": "Ekwador", "ENGLAND": "Anglia", "ESTONIA": "Estonia",
+    "FINLAND": "Finlandia", "FRANCE": "Francja", "GERMANY": "Niemcy", "ICELAND": "Islandia",
+    "IRELAND": "Irlandia", "ITALY": "Włochy", "KAZAKHSTAN": "Kazachstan", "LATVIA": "Łotwa",
+    "LITHUANIA": "Litwa", "MACAO": "Makau", "MALAWI": "Malawi", "MEXICO": "Meksyk",
+    "MOLDOVA": "Mołdawia", "NETHERLANDS": "Holandia", "NICARAGUA": "Nikaragua",
+    "PARAGUAY": "Paragwaj", "PERU": "Peru", "POLAND": "Polska", "PORTUGAL": "Portugalia",
+    "ROMANIA": "Rumunia", "RUSSIA": "Rosja", "SERBIA": "Serbia", "SLOVENIA": "Słowenia",
+    "SOUTH-KOREA": "Korea Południowa", "SOUTH KOREA": "Korea Południowa", "SPAIN": "Hiszpania",
+    "SWEDEN": "Szwecja", "SWITZERLAND": "Szwajcaria", "TURKEY": "Turcja", "UKRAINE": "Ukraina",
+    "URUGUAY": "Urugwaj", "USA": "Stany Zjednoczone",
 }
 
 
@@ -133,7 +101,6 @@ def _classify_context_link(node: Tag) -> tuple[str | None, str | None]:
     text = clean_text(node.get_text(" ", strip=True))
     if not text:
         return None, None
-
     slug = urlparse(urljoin(BASE_URL, href)).path.rstrip("/").split("/")[-1].lower()
     if slug.startswith("country-"):
         return polish_country_name(text), None
@@ -159,17 +126,12 @@ def _nearest_heading(anchor: Tag) -> tuple[str | None, str | None]:
     return country, league
 
 
-def list_matches(
-    session: requests.Session,
-    listing_url: str = DEFAULT_LISTING_URL,
-    listing_date: str | None = None,
-) -> list[MatchSummary]:
+def list_matches(session: requests.Session, listing_url: str = DEFAULT_LISTING_URL, listing_date: str | None = None) -> list[MatchSummary]:
     response = session.get(listing_url, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "lxml")
     items: list[MatchSummary] = []
     seen: set[str] = set()
-
     for anchor in soup.select('a[href*="match-preview-"]'):
         href = anchor.get("href")
         if not href:
@@ -185,17 +147,7 @@ def list_matches(
         context = clean_text(anchor.parent.get_text(" ", strip=True)) if anchor.parent else ""
         kickoff_match = re.search(r"\b([01]?\d|2[0-3]):[0-5]\d\b", context)
         country, league = _nearest_heading(anchor)
-        items.append(
-            MatchSummary(
-                home_team=home,
-                away_team=away,
-                kickoff=kickoff_match.group(0) if kickoff_match else None,
-                country=country,
-                league=league,
-                url=url,
-                listing_date=listing_date,
-            )
-        )
+        items.append(MatchSummary(home, away, kickoff_match.group(0) if kickoff_match else None, country, league, url, listing_date))
     return items
 
 
@@ -230,12 +182,13 @@ KNOWN_METRICS = [
     "Win and Over 1.5 goals", "Lose and Over 1.5 goals", "Team win first half",
     "Team draw at half time", "Team lost first half", "Both Teams to Score",
     "BTTS in first-half", "BBTS in second-half", "BBTS and Over 1.5", "BBTS and Over 2.5",
-    "Win and BTTS", "Draw and BTTS", "Lose and BTTS", "Over 1.5 goals", "Over 2.5 goals",
-    "Over 3.5 goals", "Under 1.5 goals", "Under 2.5 goals", "Under 3.5 goals",
+    "Win and BTTS", "Draw and BTTS", "Lose and BTTS",
+    "Match total goals 0 or 1", "Match total goals 2 or 3", "Match total goals 4+",
+    "Match total goals 0", "Match total goals 1", "Match total goals 2", "Match total goals 3", "Match total goals 4",
+    "Over 1.5 goals", "Over 2.5 goals", "Over 3.5 goals", "Under 1.5 goals", "Under 2.5 goals", "Under 3.5 goals",
     "Over 0.5 goals at half-time", "Over 1.5 goals at half-time", "Over 2.5 goals at half-time",
     "Win HT - Win FT", "Win HT - Draw FT", "Win HT - Lose FT", "Draw HT - Win FT",
-    "Draw HT - Draw FT", "Draw HT - Lose FT", "Lose HT - Win FT", "Lose HT - Draw FT",
-    "Lose HT - Lose FT",
+    "Draw HT - Draw FT", "Draw HT - Lose FT", "Lose HT - Win FT", "Lose HT - Draw FT", "Lose HT - Lose FT",
 ]
 
 
@@ -254,10 +207,7 @@ def _extract_stat_pairs(text: str) -> dict[str, dict[str, float]]:
 
 
 def _section_paragraphs(soup: BeautifulSoup, title: str) -> list[str]:
-    heading = soup.find(
-        lambda tag: tag.name in {"h2", "h3"}
-        and clean_text(tag.get_text(" ", strip=True)).lower() == title.lower()
-    )
+    heading = soup.find(lambda tag: tag.name in {"h2", "h3"} and clean_text(tag.get_text(" ", strip=True)).lower() == title.lower())
     if not heading:
         return []
     result: list[str] = []
@@ -282,17 +232,10 @@ def parse_match(session: requests.Session, summary: MatchSummary) -> MatchDetail
     home = page_home or summary.home_team
     away = page_away or summary.away_team
     return MatchDetails(
-        home_team=home,
-        away_team=away,
-        kickoff=time_match.group(0) if time_match else summary.kickoff,
-        country=summary.country,
-        league=summary.league,
-        url=summary.url,
-        listing_date=summary.listing_date,
-        match_date=date_match.group(1) if date_match else summary.listing_date,
-        stats=_extract_stat_pairs(text),
-        home_trends=_section_paragraphs(soup, f"{home} Trends"),
-        away_trends=_section_paragraphs(soup, f"{away} Trends"),
+        home_team=home, away_team=away, kickoff=time_match.group(0) if time_match else summary.kickoff,
+        country=summary.country, league=summary.league, url=summary.url, listing_date=summary.listing_date,
+        match_date=date_match.group(1) if date_match else summary.listing_date, stats=_extract_stat_pairs(text),
+        home_trends=_section_paragraphs(soup, f"{home} Trends"), away_trends=_section_paragraphs(soup, f"{away} Trends"),
     )
 
 
