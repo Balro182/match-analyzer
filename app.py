@@ -18,6 +18,13 @@ ROOT = Path(__file__).parent
 st.set_page_config(page_title="Analizator meczów", page_icon="⚽", layout="wide")
 init_db()
 
+MODE_LABELS = {
+    "both": "Obie drużyny muszą spełnić próg",
+    "any": "Wystarczy jedna drużyna",
+    "mean": "Średnia obu drużyn",
+    "special": "Stała formuła specjalna",
+}
+
 
 @st.cache_data(ttl=900, show_spinner=False)
 def load_listing_for_dates(date_values: tuple[date, ...]):
@@ -36,10 +43,10 @@ def dates_between(start: date, end: date) -> tuple[date, ...]:
 def runtime_config(base: dict) -> dict:
     result = copy.deepcopy(base)
     with st.sidebar:
-        st.subheader("Progi predykcji A/B")
+        st.subheader("Progi i tryby predykcji")
         st.caption(
-            "Każda statystyka ma osobny próg dla drużyny A i B. Po włączeniu opcji łączenia "
-            "aplikacja porównuje średnią wartości A+B ze średnią obu progów."
+            "Każda statystyka ma próg A i B. Tryb określa, czy próg muszą spełnić obie drużyny, "
+            "wystarczy jedna, czy porównywana jest średnia. Progi zerowe są zablokowane."
         )
         for rule_index, rule in enumerate(result["recommendations"]["rules"]):
             with st.expander(rule["label"]):
@@ -48,28 +55,39 @@ def runtime_config(base: dict) -> dict:
                     value=bool(rule.get("enabled", True)),
                     key=f"enabled_{rule_index}",
                 )
-                rule["combine"] = st.checkbox(
-                    "Połącz A i B w średnią",
-                    value=bool(rule.get("combine", False)),
-                    key=f"combine_{rule_index}",
-                    help="Włączone: średnia wartości A+B jest porównywana ze średnią progów A+B. Wyłączone: obie drużyny są sprawdzane oddzielnie.",
-                )
+                current_mode = str(rule.get("mode", "both"))
+                if current_mode == "special":
+                    st.info("Tryb: stała formuła specjalna. Dla 1X2 nie można zmienić sposobu liczenia.")
+                    rule["mode"] = "special"
+                else:
+                    modes = ["both", "any", "mean"]
+                    rule["mode"] = st.selectbox(
+                        "Sposób oceny",
+                        options=modes,
+                        index=modes.index(current_mode) if current_mode in modes else 0,
+                        format_func=lambda value: MODE_LABELS[value],
+                        key=f"mode_{rule_index}",
+                    )
                 for condition_index, condition in enumerate(rule.get("conditions", [])):
                     metric_name = metric_label(condition["metric"])
-                    old_threshold = float(condition.get("threshold", 0))
-                    current_home = float(condition.get("threshold_home", old_threshold))
-                    current_away = float(condition.get("threshold_away", old_threshold))
-                    step = 0.1 if max(abs(current_home), abs(current_away)) < 10 else 1.0
+                    old_threshold = float(condition.get("threshold", 1))
+                    current_home = max(float(condition.get("threshold_home", old_threshold)), 0.1)
+                    current_away = max(float(condition.get("threshold_away", old_threshold)), 0.1)
+                    is_small_scale = max(abs(current_home), abs(current_away)) < 10
+                    step = 0.1 if is_small_scale else 1.0
+                    minimum = 0.1 if is_small_scale else 1.0
                     st.caption(f"{metric_name} {condition.get('operator', '>=')}")
                     col_a, col_b = st.columns(2)
                     condition["threshold_home"] = col_a.number_input(
                         "Próg A",
+                        min_value=minimum,
                         value=current_home,
                         step=step,
                         key=f"threshold_a_{rule_index}_{condition_index}",
                     )
                     condition["threshold_away"] = col_b.number_input(
                         "Próg B",
+                        min_value=minimum,
                         value=current_away,
                         step=step,
                         key=f"threshold_b_{rule_index}_{condition_index}",
@@ -139,7 +157,7 @@ def display_value(value: bool | None) -> str:
 
 base_config = load_config()
 st.title("⚽ Analizator meczów")
-st.caption("Predykcje przedmeczowe, progi A/B, zapis do weryfikacji, rozliczanie wyników i kalibracja.")
+st.caption("Predykcje przedmeczowe, progi A/B, różne tryby oceny, rozliczanie wyników i kalibracja.")
 analysis_tab, pending_tab, history_tab, calibration_tab = st.tabs(
     ["Analiza meczów", "Mecze do rozliczenia", "Historia", "Kalibracja progów"]
 )
@@ -162,9 +180,9 @@ with analysis_tab:
         )
         display_limit = st.slider("Liczba najlepszych spotkań do wyświetlenia", 1, 100, 10)
         min_score = st.slider(
-            "Minimalny wynik predykcji", 0, 100, int(base_config["recommendations"].get("min_score", 60))
+            "Minimalny wynik predykcji", 0, 100, int(base_config["recommendations"].get("min_score", 70))
         )
-        require_passed = st.checkbox("Wymagaj spełnienia wszystkich warunków predykcji", value=True)
+        require_passed = st.checkbox("Wymagaj spełnienia reguły predykcji", value=True)
         current_config = runtime_config(base_config)
 
     try:
