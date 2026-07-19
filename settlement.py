@@ -1,145 +1,140 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
-def _norm(value: str) -> str:
-    return " ".join((value or "").lower().replace("–", "-").split())
+def _side_states(home: int, away: int) -> tuple[str, str]:
+    if home > away:
+        return "win", "lose"
+    if home < away:
+        return "lose", "win"
+    return "draw", "draw"
 
 
-def _actual(label: str, home: int, away: int, home_ht: int | None, away_ht: int | None) -> bool | None:
-    text = _norm(label)
+def _actual_by_rule(
+    rule_id: str,
+    home: int,
+    away: int,
+    home_ht: int | None,
+    away_ht: int | None,
+) -> bool | None:
     total = home + away
     btts = home > 0 and away > 0
+    home_ft, away_ft = _side_states(home, away)
 
-    if "średnia" in text or "gole zdobywane" in text or "gole tracone" in text:
+    # Statystyki opisowe nie są bezpośrednio zdarzeniami wynikowymi.
+    if rule_id in {"avg_scored", "avg_conceded"}:
         return None
-    if "czyste konto gospodarzy" in text or "gospodarze bez straty" in text:
-        return away == 0
-    if "czyste konto gości" in text or "goście bez straty" in text:
-        return home == 0
-    if "gospodarze strzelą co najmniej dwa" in text:
-        return home >= 2
-    if "goście strzelą co najmniej dwa" in text:
-        return away >= 2
-    if "gospodarze strzelą" in text:
-        return home >= 1
-    if "goście strzelą" in text:
-        return away >= 1
 
-    if "suma goli 0-1" in text:
-        return total <= 1
-    if "suma goli 2-3" in text:
-        return 2 <= total <= 3
-    if "suma goli 4+" in text:
-        return total >= 4
-    match = re.search(r"suma goli\s+([0-4])(?:\D|$)", text)
-    if match:
-        return total == int(match.group(1))
-
-    if "powyżej 1,5 gola" in text and "pierwszej połowie" not in text and "do przerwy" not in text:
-        base = total > 1
-        if "obie drużyny" in text:
-            return btts and base
-        if "wygrana gospodarzy" in text or "gospodarze" in text and "wygryw" in text:
-            return home > away and base
-        if "wygrana gości" in text or "goście" in text and "wygryw" in text:
-            return away > home and base
-        if "porażka gospodarzy" in text:
-            return home < away and base
-        if "porażka gości" in text:
-            return away < home and base
-        return base
-    if "powyżej 2,5 gola" in text and "pierwszej połowie" not in text and "do przerwy" not in text:
-        return (btts and total > 2) if "obie drużyny" in text else total > 2
-    if "powyżej 3,5 gola" in text:
-        return total > 3
-    if "poniżej 1,5 gola" in text:
-        return total < 2
-    if "poniżej 2,5 gola" in text:
-        return total < 3
-    if "poniżej 3,5 gola" in text:
-        return total < 4
-
-    if "obie drużyny strzelą" in text:
-        if "nie" in text:
-            return not btts
-        if "pierwszej połowie" in text or "do przerwy" in text:
-            return None if home_ht is None or away_ht is None else home_ht > 0 and away_ht > 0
-        if "drugiej połowie" in text:
-            return None if home_ht is None or away_ht is None else (home-home_ht > 0 and away-away_ht > 0)
-        if "wygrana gospodarzy" in text:
-            return home > away and btts
-        if "wygrana gości" in text:
-            return away > home and btts
-        if "remis" in text:
-            return home == away and btts
+    if rule_id == "clean_sheets":
+        return home == 0 or away == 0
+    if rule_id == "team_scored":
         return btts
+    if rule_id == "team_scored_twice":
+        return home >= 2 and away >= 2
 
-    if "do przerwy" in text or "pierwszą połowę" in text or "pierwszej połowie" in text:
+    if rule_id in {"scored_both_halves", "goal_both_halves"}:
         if home_ht is None or away_ht is None:
             return None
-        ht_total = home_ht + away_ht
-        if "powyżej 0,5" in text:
-            return ht_total > 0
-        if "powyżej 1,5" in text:
-            return ht_total > 1
-        if "powyżej 2,5" in text:
-            return ht_total > 2
-        if "remis" in text and "na koniec" not in text:
-            return home_ht == away_ht
-        if "gospodarze" in text and ("prowadzą" in text or "wygrywa" in text):
-            return home_ht > away_ht
-        if "goście" in text and ("prowadzą" in text or "wygrywa" in text):
-            return away_ht > home_ht
+        home_second = home - home_ht
+        away_second = away - away_ht
+        if rule_id == "scored_both_halves":
+            return (home_ht > 0 and home_second > 0) or (away_ht > 0 and away_second > 0)
+        return (home_ht + away_ht > 0) and (home_second + away_second > 0)
 
-    # HT/FT: kolejność wyniku dotyczy analizowanej strony. Dla etykiet ogólnych
-    # rozliczamy wariant gospodarzy; wariant gości jest odwrócony przez nazwę etykiety.
-    if "przerwy" in text and "na koniec" in text:
-        if home_ht is None or away_ht is None:
-            return None
-        ht = "win" if home_ht > away_ht else "lose" if home_ht < away_ht else "draw"
-        ft = "win" if home > away else "lose" if home < away else "draw"
-        mapping = {
-            "wygrana do przerwy i wygrana na koniec": ("win", "win"),
-            "wygrana do przerwy i remis na koniec": ("win", "draw"),
-            "wygrana do przerwy i porażka na koniec": ("win", "lose"),
-            "remis do przerwy i wygrana na koniec": ("draw", "win"),
-            "remis do przerwy i remis na koniec": ("draw", "draw"),
-            "remis do przerwy i porażka na koniec": ("draw", "lose"),
-            "porażka do przerwy i wygrana na koniec": ("lose", "win"),
-            "porażka do przerwy i remis na koniec": ("lose", "draw"),
-            "porażka do przerwy i porażka na koniec": ("lose", "lose"),
-        }
-        for phrase, expected in mapping.items():
-            if phrase in text:
-                return (ht, ft) == expected
+    direct = {
+        "home_win": home > away,
+        "draw": home == away,
+        "away_win": away > home,
+        "win_over15": home != away and total > 1,
+        "lose_over15": home != away and total > 1,
+        "btts": btts,
+        "btts_over15": btts and total > 1,
+        "btts_over25": btts and total > 2,
+        "home_win_btts": home > away and btts,
+        "draw_btts": home == away and btts,
+        "away_win_btts": away > home and btts,
+        "total0": total == 0,
+        "total1": total == 1,
+        "total2": total == 2,
+        "total3": total == 3,
+        "total4": total == 4,
+        "total01": total <= 1,
+        "total23": 2 <= total <= 3,
+        "total4plus": total >= 4,
+        "over15": total > 1,
+        "over25": total > 2,
+        "over35": total > 3,
+        "under15": total < 2,
+        "under25": total < 3,
+        "under35": total < 4,
+    }
+    if rule_id in direct:
+        return direct[rule_id]
 
-    if "wygrana gospodarzy" in text:
-        return home > away
-    if "wygrana gości" in text:
-        return away > home
-    if text == "remis" or text.startswith("remis —"):
-        return home == away
+    if home_ht is None or away_ht is None:
+        return None
+
+    ht_total = home_ht + away_ht
+    home_ht_state, away_ht_state = _side_states(home_ht, away_ht)
+
+    half_time = {
+        "home_win_ht": home_ht > away_ht,
+        "draw_ht": home_ht == away_ht,
+        "away_win_ht": away_ht > home_ht,
+        "btts_ht1": home_ht > 0 and away_ht > 0,
+        "btts_ht2": (home - home_ht > 0) and (away - away_ht > 0),
+        "over05ht": ht_total > 0,
+        "over15ht": ht_total > 1,
+        "over25ht": ht_total > 2,
+    }
+    if rule_id in half_time:
+        return half_time[rule_id]
+
+    # Ogólne rynki HT/FT są spełnione, gdy wskazany układ wystąpił
+    # z perspektywy którejkolwiek z dwóch drużyn.
+    htft_map = {
+        "win_win": ("win", "win"),
+        "win_draw": ("win", "draw"),
+        "win_lose": ("win", "lose"),
+        "draw_win": ("draw", "win"),
+        "draw_draw": ("draw", "draw"),
+        "draw_lose": ("draw", "lose"),
+        "lose_win": ("lose", "win"),
+        "lose_draw": ("lose", "draw"),
+        "lose_lose": ("lose", "lose"),
+    }
+    expected = htft_map.get(rule_id)
+    if expected is not None:
+        return (home_ht_state, home_ft) == expected or (away_ht_state, away_ft) == expected
+
     return None
 
 
-def settle_recommendations(recommendations: list[dict[str, Any]], home: int, away: int, home_ht: int | None = None, away_ht: int | None = None) -> list[dict[str, Any]]:
+def settle_recommendations(
+    recommendations: list[dict[str, Any]],
+    home: int,
+    away: int,
+    home_ht: int | None = None,
+    away_ht: int | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for recommendation in recommendations:
         predicted = bool(recommendation.get("passed"))
-        actual = _actual(recommendation.get("label", ""), home, away, home_ht, away_ht)
+        rule_id = str(recommendation.get("rule_id") or "")
+        actual = _actual_by_rule(rule_id, home, away, home_ht, away_ht)
         if actual is None:
             result = "brak danych"
         else:
             result = "trafiona" if predicted == actual else "nietrafiona"
-        rows.append({
-            "rule_id": recommendation.get("rule_id"),
-            "label": recommendation.get("label"),
-            "score": recommendation.get("score"),
-            "predicted": predicted,
-            "actual": actual,
-            "result": result,
-        })
+        rows.append(
+            {
+                "rule_id": rule_id,
+                "label": recommendation.get("label"),
+                "score": recommendation.get("score"),
+                "predicted": predicted,
+                "actual": actual,
+                "result": result,
+            }
+        )
     return rows
