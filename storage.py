@@ -46,12 +46,14 @@ def init_db() -> None:
 def save_match(snapshot: dict[str, Any]) -> tuple[bool, str]:
     init_db()
     match = snapshot["match"]
-    unique_key = "|".join([
-        str(match.get("match_date") or match.get("listing_date") or ""),
-        str(match.get("home_team") or ""),
-        str(match.get("away_team") or ""),
-        str(match.get("url") or ""),
-    ])
+    unique_key = "|".join(
+        [
+            str(match.get("match_date") or match.get("listing_date") or ""),
+            str(match.get("home_team") or ""),
+            str(match.get("away_team") or ""),
+            str(match.get("url") or ""),
+        ]
+    )
     try:
         with _connect() as con:
             con.execute(
@@ -79,8 +81,37 @@ def save_match(snapshot: dict[str, Any]) -> tuple[bool, str]:
         return False, "Ten mecz jest już zapisany do weryfikacji."
 
 
+def _refresh_settlements() -> None:
+    """Przelicza historię aktualnym, poprawionym mechanizmem rozliczeń."""
+    from settlement import settle_recommendations
+
+    with _connect() as con:
+        rows = con.execute(
+            """
+            SELECT id, snapshot_json, home_ft, away_ft, home_ht, away_ht
+            FROM saved_matches
+            WHERE status='rozliczony' AND home_ft IS NOT NULL AND away_ft IS NOT NULL
+            """
+        ).fetchall()
+        for row in rows:
+            snapshot = json.loads(row["snapshot_json"])
+            settlement = settle_recommendations(
+                snapshot.get("recommendations", []),
+                int(row["home_ft"]),
+                int(row["away_ft"]),
+                None if row["home_ht"] is None else int(row["home_ht"]),
+                None if row["away_ht"] is None else int(row["away_ht"]),
+            )
+            con.execute(
+                "UPDATE saved_matches SET settlement_json=? WHERE id=?",
+                (json.dumps(settlement, ensure_ascii=False), int(row["id"])),
+            )
+
+
 def list_matches(status: str | None = None) -> list[dict[str, Any]]:
     init_db()
+    if status in {None, "rozliczony"}:
+        _refresh_settlements()
     query = "SELECT * FROM saved_matches"
     params: tuple[Any, ...] = ()
     if status:
@@ -91,7 +122,14 @@ def list_matches(status: str | None = None) -> list[dict[str, Any]]:
         return [dict(row) for row in con.execute(query, params).fetchall()]
 
 
-def settle_match(match_id: int, home_ft: int, away_ft: int, home_ht: int | None, away_ht: int | None, settlement: list[dict[str, Any]]) -> None:
+def settle_match(
+    match_id: int,
+    home_ft: int,
+    away_ft: int,
+    home_ht: int | None,
+    away_ht: int | None,
+    settlement: list[dict[str, Any]],
+) -> None:
     with _connect() as con:
         con.execute(
             """
