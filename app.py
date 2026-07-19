@@ -63,77 +63,80 @@ def dates_between(start: date, end: date) -> tuple[date, ...]:
 
 
 def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict:
+    """Renderuje kontrolki w aktualnym kontekście sidebara — bez ponownego otwierania st.sidebar."""
     result = copy.deepcopy(base)
     result.setdefault("recommendations", {})["min_score"] = int(minimum_score)
     result["recommendations"]["min_data_quality"] = int(minimum_quality)
 
-    with st.sidebar:
-        st.subheader("Progi i tryby predykcji")
-        profile = prediction_profile_info()
-        if profile:
-            updated = str(profile.get("updated_at") or "").replace("T", " ").replace("+00:00", " UTC")
-            st.success(f"Aktywny trwały profil: {profile.get('name')}\n\nOstatni zapis: {updated}")
-        else:
-            st.info("Używane są wartości domyślne z config.yaml.")
-        st.caption("Score 100 oznacza osiągnięcie progu; wartości powyżej 100 oznaczają zapas ponad próg.")
+    st.subheader("Progi i tryby predykcji")
+    profile = prediction_profile_info()
+    if profile:
+        updated = str(profile.get("updated_at") or "").replace("T", " ").replace("+00:00", " UTC")
+        st.success(f"Aktywny trwały profil: {profile.get('name')}\n\nOstatni zapis: {updated}")
+    else:
+        st.info("Używane są wartości domyślne z config.yaml.")
 
-        for rule_index, rule in enumerate(result["recommendations"]["rules"]):
-            with st.expander(rule["label"]):
-                rule["enabled"] = st.checkbox(
-                    "Predykcja aktywna", value=bool(rule.get("enabled", True)), key=f"enabled_{rule_index}"
-                )
-                current_mode = str(rule.get("mode", "both"))
-                if current_mode == "special":
-                    st.info("Tryb: stała, jednoznaczna formuła rynku")
-                else:
-                    options = ["both", "any", "mean"]
-                    rule["mode"] = st.selectbox(
-                        "Tryb oceny",
-                        options,
-                        index=options.index(current_mode) if current_mode in options else 0,
-                        format_func=lambda value: MODE_LABELS[value],
-                        key=f"mode_{rule_index}",
-                    )
-                for condition_index, condition in enumerate(rule.get("conditions", [])):
-                    old = float(condition.get("threshold", 1))
-                    current_home = float(condition.get("threshold_home", old))
-                    current_away = float(condition.get("threshold_away", old))
-                    step = 0.1 if max(abs(current_home), abs(current_away)) < 10 else 1.0
-                    minimum = 0.1 if step == 0.1 else 1.0
-                    st.caption(f"{metric_label(condition['metric'])} {condition.get('operator', '>=')}")
-                    col_a, col_b = st.columns(2)
-                    condition["threshold_home"] = col_a.number_input(
-                        "Próg A",
-                        min_value=minimum,
-                        value=max(current_home, minimum),
-                        step=step,
-                        key=f"threshold_a_{rule_index}_{condition_index}",
-                    )
-                    condition["threshold_away"] = col_b.number_input(
-                        "Próg B",
-                        min_value=minimum,
-                        value=max(current_away, minimum),
-                        step=step,
-                        key=f"threshold_b_{rule_index}_{condition_index}",
-                    )
-                    condition.pop("threshold", None)
-                    condition.pop("side", None)
-                    condition.pop("aggregation", None)
+    st.caption("Score 100 oznacza osiągnięcie progu; wartości powyżej 100 oznaczają zapas ponad próg.")
 
-        st.divider()
-        st.caption("Zmiany w polach działają od razu w bieżącej sesji. Trwały zapis następuje dopiero po użyciu przycisku poniżej.")
-        save_col, reset_col = st.columns(2)
-        if save_col.button("💾 Zapisz progi na stałe", use_container_width=True, type="primary"):
-            ok, message = save_prediction_config(result)
-            (st.success if ok else st.error)(message)
-        if reset_col.button("↩ Przywróć domyślne", use_container_width=True):
-            ok, message = reset_prediction_config()
-            if ok:
-                clear_prediction_widget_state()
-                st.success(message)
-                st.rerun()
+    for rule_index, rule in enumerate(result["recommendations"].get("rules", [])):
+        with st.expander(rule.get("label", rule.get("id", "Reguła"))):
+            rule["enabled"] = st.checkbox(
+                "Predykcja aktywna",
+                value=bool(rule.get("enabled", True)),
+                key=f"enabled_{rule_index}",
+            )
+            current_mode = str(rule.get("mode", "both"))
+            if current_mode == "special":
+                st.info("Tryb: stała, jednoznaczna formuła rynku")
             else:
-                st.error(message)
+                options = ["both", "any", "mean"]
+                rule["mode"] = st.selectbox(
+                    "Tryb oceny",
+                    options,
+                    index=options.index(current_mode) if current_mode in options else 0,
+                    format_func=lambda value: MODE_LABELS[value],
+                    key=f"mode_{rule_index}",
+                )
+
+            for condition_index, condition in enumerate(rule.get("conditions", [])):
+                old = float(condition.get("threshold", 1))
+                current_home = float(condition.get("threshold_home", old))
+                current_away = float(condition.get("threshold_away", old))
+                step = 0.1 if max(abs(current_home), abs(current_away)) < 10 else 1.0
+                minimum = 0.1 if step == 0.1 else 1.0
+                st.caption(f"{metric_label(condition['metric'])} {condition.get('operator', '>=')}")
+                col_a, col_b = st.columns(2)
+                condition["threshold_home"] = col_a.number_input(
+                    "Próg A",
+                    min_value=minimum,
+                    value=max(current_home, minimum),
+                    step=step,
+                    key=f"threshold_a_{rule_index}_{condition_index}",
+                )
+                condition["threshold_away"] = col_b.number_input(
+                    "Próg B",
+                    min_value=minimum,
+                    value=max(current_away, minimum),
+                    step=step,
+                    key=f"threshold_b_{rule_index}_{condition_index}",
+                )
+                condition.pop("threshold", None)
+                condition.pop("side", None)
+                condition.pop("aggregation", None)
+
+    st.divider()
+    st.caption("Zmiany działają od razu w sesji. Trwały zapis następuje po użyciu przycisku.")
+    save_col, reset_col = st.columns(2)
+    if save_col.button("💾 Zapisz progi na stałe", use_container_width=True, type="primary"):
+        ok, message = save_prediction_config(result)
+        (st.success if ok else st.error)(message)
+    if reset_col.button("↩ Przywróć domyślne", use_container_width=True):
+        ok, message = reset_prediction_config()
+        if ok:
+            clear_prediction_widget_state()
+            st.success(message)
+            st.rerun()
+        st.error(message)
     return result
 
 
@@ -148,14 +151,19 @@ def prediction_table(item: dict) -> pd.DataFrame:
             and float(rec.get("data_quality", 0)) >= minimum_quality
             and (bool(rec.get("passed")) or not require_passed)
         )
-        rows.append({
-            "Predykcja": rec.get("label"), "Score": rec.get("score"),
-            "Jakość danych %": rec.get("data_quality"), "Wartość": rec.get("raw_value"),
-            "Próg": rec.get("threshold"), "Tryb": MODE_LABELS.get(rec.get("mode"), rec.get("mode")),
-            "Warunek spełniony": "TAK" if rec.get("passed") else "NIE",
-            "Spełnia filtr": "TAK" if qualifies else "NIE",
-            "Uzasadnienie": " | ".join(rec.get("reasons", [])),
-        })
+        rows.append(
+            {
+                "Predykcja": rec.get("label"),
+                "Score": rec.get("score"),
+                "Jakość danych %": rec.get("data_quality"),
+                "Wartość": rec.get("raw_value"),
+                "Próg": rec.get("threshold"),
+                "Tryb": MODE_LABELS.get(rec.get("mode"), rec.get("mode")),
+                "Warunek spełniony": "TAK" if rec.get("passed") else "NIE",
+                "Spełnia filtr": "TAK" if qualifies else "NIE",
+                "Uzasadnienie": " | ".join(rec.get("reasons", [])),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -164,7 +172,8 @@ def matching_recommendations(item: dict) -> list[dict]:
     minimum_quality = float(item.get("minimum_data_quality", 100))
     require_passed = bool(item.get("require_passed", True))
     return [
-        rec for rec in item.get("recommendations", [])
+        rec
+        for rec in item.get("recommendations", [])
         if float(rec.get("score", 0)) >= minimum_score
         and float(rec.get("data_quality", 0)) >= minimum_quality
         and (bool(rec.get("passed")) or not require_passed)
@@ -175,7 +184,7 @@ def ranking_values(item: dict) -> tuple[float, int, float]:
     matched = matching_recommendations(item)
     if not matched:
         return 0.0, 0, 0.0
-    scores = sorted((float(rec["score"]) for rec in matched), reverse=True)
+    scores = sorted((float(rec.get("score", 0)) for rec in matched), reverse=True)
     top = scores[:3]
     return max(scores), len(scores), sum(top) / len(top)
 
@@ -188,7 +197,7 @@ def display_value(value: bool | None) -> str:
 
 base_config = load_config()
 st.title("⚽ Analizator meczów")
-st.caption(f"Algorytm {ALGORITHM_VERSION} — predykcje, audytowalne snapshoty, rozliczanie i kalibracja.")
+st.caption(f"Algorytm {ALGORITHM_VERSION} — predykcje, snapshoty, rozliczanie i kalibracja.")
 analysis_tab, pending_tab, history_tab, calibration_tab = st.tabs(
     ["Analiza meczów", "Mecze do rozliczenia", "Historia", "Kalibracja progów"]
 )
@@ -198,13 +207,30 @@ with analysis_tab:
     with st.sidebar:
         st.header("Zakres analizy")
         selected_range = st.date_input(
-            "Zakres dat", value=(today, today), min_value=today - timedelta(days=2),
-            max_value=today + timedelta(days=2), format="DD.MM.YYYY",
+            "Zakres dat",
+            value=(today, today),
+            min_value=today - timedelta(days=2),
+            max_value=today + timedelta(days=2),
+            format="DD.MM.YYYY",
         )
-        start_date, end_date = selected_range if isinstance(selected_range, tuple) and len(selected_range) == 2 else (selected_range, selected_range)
+        start_date, end_date = (
+            selected_range
+            if isinstance(selected_range, tuple) and len(selected_range) == 2
+            else (selected_range, selected_range)
+        )
         display_limit = st.slider("Liczba najlepszych spotkań", 1, 100, 10)
-        min_score = st.slider("Minimalny score", 50, 150, int(base_config["recommendations"].get("min_score", 100)))
-        min_quality = st.slider("Minimalna jakość danych %", 0, 100, int(base_config["recommendations"].get("min_data_quality", 100)))
+        min_score = st.slider(
+            "Minimalny score",
+            50,
+            150,
+            int(base_config["recommendations"].get("min_score", 100)),
+        )
+        min_quality = st.slider(
+            "Minimalna jakość danych %",
+            0,
+            100,
+            int(base_config["recommendations"].get("min_data_quality", 100)),
+        )
         require_passed = st.checkbox("Wymagaj spełnienia warunku rynku", value=True)
         current_config = runtime_config(base_config, min_score, min_quality)
 
@@ -213,32 +239,42 @@ with analysis_tab:
     except Exception as exc:
         st.error(f"Nie udało się pobrać listy spotkań: {exc}")
         listing, unsupported = [], []
+
     if unsupported:
         st.warning("Źródło nie obsługuje dat: " + ", ".join(value.strftime("%d.%m.%Y") for value in unsupported))
 
     countries = sorted({match.country for match in listing if match.country})
     selected_countries = st.multiselect("Kraje", countries, default=[], placeholder="Brak zaznaczenia = wszystkie")
-    available_leagues = sorted({match.league for match in listing if match.league and (not selected_countries or match.country in selected_countries)})
+    available_leagues = sorted(
+        {
+            match.league
+            for match in listing
+            if match.league and (not selected_countries or match.country in selected_countries)
+        }
+    )
     selected_leagues = st.multiselect("Ligi", available_leagues, default=[], placeholder="Brak zaznaczenia = wszystkie")
     search = st.text_input("Wyszukaj drużynę")
     filtered = [
-        match for match in listing
+        match
+        for match in listing
         if (not selected_countries or match.country in selected_countries)
         and (not selected_leagues or match.league in selected_leagues)
         and (not search or search.casefold() in f"{match.home_team} {match.away_team}".casefold())
     ]
+
     m1, m2, m3 = st.columns(3)
     m1.metric("Wszystkie mecze", len(listing))
     m2.metric("Po filtrach", len(filtered))
     m3.metric("Do wyświetlenia", min(display_limit, len(filtered)))
 
     if st.button("Przeanalizuj wszystkie spotkania", type="primary", disabled=not filtered):
-        with st.spinner(f"Pobieranie i analiza {len(filtered)} spotkań w jednej sesji HTTP..."):
+        with st.spinner(f"Pobieranie i analiza {len(filtered)} spotkań..."):
             details = scrape_matches(
                 filtered,
                 delay_seconds=float(current_config.get("source", {}).get("request_delay_seconds", 0.25)),
                 session=create_session(),
             )
+
         all_results = []
         failed = 0
         for match in details:
@@ -250,17 +286,25 @@ with analysis_tab:
                 "match": match_dict,
                 "recommendations": [rec.to_dict() for rec in recommendations],
                 "thresholds": current_config["recommendations"]["rules"],
-                "minimum_score": min_score, "minimum_data_quality": min_quality,
-                "require_passed": require_passed, "algorithm_version": ALGORITHM_VERSION,
+                "minimum_score": min_score,
+                "minimum_data_quality": min_quality,
+                "require_passed": require_passed,
+                "algorithm_version": ALGORITHM_VERSION,
                 "config_version": ALGORITHM_VERSION,
             }
             best, count, average = ranking_values(item)
             item["ranking"] = {"best_score": best, "matched_count": count, "top_average": average}
             all_results.append(item)
+
         qualifying = [item for item in all_results if matching_recommendations(item)]
-        qualifying.sort(key=lambda item: (
-            item["ranking"]["best_score"], item["ranking"]["matched_count"], item["ranking"]["top_average"]
-        ), reverse=True)
+        qualifying.sort(
+            key=lambda item: (
+                item["ranking"]["best_score"],
+                item["ranking"]["matched_count"],
+                item["ranking"]["top_average"],
+            ),
+            reverse=True,
+        )
         st.session_state["analysis_all_count"] = len(all_results)
         st.session_state["analysis_failed_count"] = failed
         st.session_state["analysis_qualifying_count"] = len(qualifying)
@@ -285,10 +329,11 @@ with analysis_tab:
             if match.get("errors"):
                 st.warning(" | ".join(match["errors"]))
             table = prediction_table(item)
-            shown = table[table["Spełnia filtr"] == "TAK"].sort_values("Score", ascending=False)
-            st.dataframe(shown, use_container_width=True, hide_index=True)
-            with st.expander("Pokaż wszystkie predykcje"):
-                st.dataframe(table, use_container_width=True, hide_index=True)
+            if not table.empty:
+                shown = table[table["Spełnia filtr"] == "TAK"].sort_values("Score", ascending=False)
+                st.dataframe(shown, use_container_width=True, hide_index=True)
+                with st.expander("Pokaż wszystkie predykcje"):
+                    st.dataframe(table, use_container_width=True, hide_index=True)
             if st.button("Zapisz ten mecz do weryfikacji", key=f"save_{index}"):
                 ok, message = save_match(item)
                 (st.success if ok else st.warning)(message)
@@ -317,7 +362,9 @@ with pending_tab:
                 if not valid:
                     st.error(message)
                 else:
-                    settlement = settle_recommendations(snapshot.get("recommendations", []), int(home_ft), int(away_ft), home_ht, away_ht)
+                    settlement = settle_recommendations(
+                        snapshot.get("recommendations", []), int(home_ft), int(away_ft), home_ht, away_ht
+                    )
                     settle_match(row["id"], int(home_ft), int(away_ft), home_ht, away_ht, settlement)
                     st.success("Mecz został rozliczony.")
                     st.rerun()
@@ -340,12 +387,17 @@ with history_tab:
         ):
             show_no_type = st.checkbox("Pokaż brak typu", False, key=f"show_{row['id']}")
             visible = settlement if show_no_type else [item for item in settlement if item.get("result") != "brak typu"]
-            display_rows = [{
-                "Predykcja": item.get("label"), "Score": item.get("score"),
-                "Jakość danych %": item.get("data_quality"),
-                "Decyzja": "TYPUJEMY" if item.get("predicted") else "BRAK TYPU",
-                "Zdarzenie wystąpiło": display_value(item.get("actual")), "Ocena": item.get("result"),
-            } for item in visible]
+            display_rows = [
+                {
+                    "Predykcja": item.get("label"),
+                    "Score": item.get("score"),
+                    "Jakość danych %": item.get("data_quality"),
+                    "Decyzja": "TYPUJEMY" if item.get("predicted") else "BRAK TYPU",
+                    "Zdarzenie wystąpiło": display_value(item.get("actual")),
+                    "Ocena": item.get("result"),
+                }
+                for item in visible
+            ]
             st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
             if st.button("Przelicz aktualnym algorytmem", key=f"reprocess_{row['id']}"):
                 ok, message = reprocess_match(row["id"])
@@ -355,23 +407,38 @@ with history_tab:
             for item in settlement:
                 export_rows.append({"Mecz": f"{row['home_team']} – {row['away_team']}", **item})
     if export_rows:
-        st.download_button("Pobierz historię CSV", pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8-sig"), "historia_predykcji.csv", "text/csv")
+        st.download_button(
+            "Pobierz historię CSV",
+            pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8-sig"),
+            "historia_predykcji.csv",
+            "text/csv",
+        )
 
 with calibration_tab:
     records = []
     for row in list_matches("rozliczony"):
-        records.extend(item for item in json.loads(row.get("settlement_json") or "[]") if item.get("result") in {"trafiona", "nietrafiona"})
+        records.extend(
+            item
+            for item in json.loads(row.get("settlement_json") or "[]")
+            if item.get("result") in {"trafiona", "nietrafiona"}
+        )
     if not records:
         st.info("Kalibracja pojawi się po rozliczeniu pierwszych aktywnych typów.")
     else:
         frame = pd.DataFrame(records)
         frame["trafiona"] = frame["result"].eq("trafiona")
         summary = frame.groupby("label").agg(
-            Typy=("trafiona", "size"), Trafione=("trafiona", "sum"), Średni_score=("score", "mean")
+            Typy=("trafiona", "size"),
+            Trafione=("trafiona", "sum"),
+            Średni_score=("score", "mean"),
         ).reset_index()
         summary["Nietrafione"] = summary["Typy"] - summary["Trafione"]
         summary["Skuteczność %"] = (summary["Trafione"] / summary["Typy"] * 100).round(1)
-        st.dataframe(summary.sort_values(["Skuteczność %", "Typy"], ascending=[False, False]), use_container_width=True, hide_index=True)
+        st.dataframe(
+            summary.sort_values(["Skuteczność %", "Typy"], ascending=[False, False]),
+            use_container_width=True,
+            hide_index=True,
+        )
         st.caption("Do oceny opłacalności nadal potrzebne są kursy i ROI; sama trafialność nie mierzy wartości zakładu.")
 
 st.warning("SQLite jest odpowiedni lokalnie. Do trwałego wdrożenia wieloużytkownikowego należy ustawić PostgreSQL lub Supabase.")
