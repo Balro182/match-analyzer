@@ -12,7 +12,18 @@ import yaml
 from engine import ALGORITHM_VERSION, analyze_match, metric_label
 from scraper import create_session, list_matches_for_dates, scrape_matches
 from settlement import settle_recommendations, validate_scoreline
-from storage import delete_match, init_db, list_matches, reprocess_match, save_match, settle_match
+from storage import (
+    delete_match,
+    init_db,
+    list_matches,
+    load_prediction_config,
+    prediction_profile_info,
+    reprocess_match,
+    reset_prediction_config,
+    save_match,
+    save_prediction_config,
+    settle_match,
+)
 
 ROOT = Path(__file__).parent
 st.set_page_config(page_title="Analizator meczów", page_icon="⚽", layout="wide")
@@ -33,18 +44,39 @@ def load_listing_for_dates(date_values: tuple[date, ...]):
 
 def load_config() -> dict:
     with open(ROOT / "config.yaml", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+        file_config = yaml.safe_load(handle)
+    saved_config = load_prediction_config()
+    if saved_config and isinstance(saved_config.get("recommendations"), dict):
+        return saved_config
+    return file_config
+
+
+def clear_prediction_widget_state() -> None:
+    prefixes = ("enabled_", "mode_", "threshold_a_", "threshold_b_")
+    for key in list(st.session_state):
+        if key.startswith(prefixes):
+            del st.session_state[key]
 
 
 def dates_between(start: date, end: date) -> tuple[date, ...]:
     return tuple(start + timedelta(days=i) for i in range((end - start).days + 1))
 
 
-def runtime_config(base: dict) -> dict:
+def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict:
     result = copy.deepcopy(base)
+    result.setdefault("recommendations", {})["min_score"] = int(minimum_score)
+    result["recommendations"]["min_data_quality"] = int(minimum_quality)
+
     with st.sidebar:
         st.subheader("Progi i tryby predykcji")
+        profile = prediction_profile_info()
+        if profile:
+            updated = str(profile.get("updated_at") or "").replace("T", " ").replace("+00:00", " UTC")
+            st.success(f"Aktywny trwały profil: {profile.get('name')}\n\nOstatni zapis: {updated}")
+        else:
+            st.info("Używane są wartości domyślne z config.yaml.")
         st.caption("Score 100 oznacza osiągnięcie progu; wartości powyżej 100 oznaczają zapas ponad próg.")
+
         for rule_index, rule in enumerate(result["recommendations"]["rules"]):
             with st.expander(rule["label"]):
                 rule["enabled"] = st.checkbox(
@@ -56,9 +88,11 @@ def runtime_config(base: dict) -> dict:
                 else:
                     options = ["both", "any", "mean"]
                     rule["mode"] = st.selectbox(
-                        "Tryb oceny", options,
+                        "Tryb oceny",
+                        options,
                         index=options.index(current_mode) if current_mode in options else 0,
-                        format_func=lambda value: MODE_LABELS[value], key=f"mode_{rule_index}",
+                        format_func=lambda value: MODE_LABELS[value],
+                        key=f"mode_{rule_index}",
                     )
                 for condition_index, condition in enumerate(rule.get("conditions", [])):
                     old = float(condition.get("threshold", 1))
@@ -69,16 +103,37 @@ def runtime_config(base: dict) -> dict:
                     st.caption(f"{metric_label(condition['metric'])} {condition.get('operator', '>=')}")
                     col_a, col_b = st.columns(2)
                     condition["threshold_home"] = col_a.number_input(
-                        "Próg A", min_value=minimum, value=max(current_home, minimum), step=step,
+                        "Próg A",
+                        min_value=minimum,
+                        value=max(current_home, minimum),
+                        step=step,
                         key=f"threshold_a_{rule_index}_{condition_index}",
                     )
                     condition["threshold_away"] = col_b.number_input(
-                        "Próg B", min_value=minimum, value=max(current_away, minimum), step=step,
+                        "Próg B",
+                        min_value=minimum,
+                        value=max(current_away, minimum),
+                        step=step,
                         key=f"threshold_b_{rule_index}_{condition_index}",
                     )
                     condition.pop("threshold", None)
                     condition.pop("side", None)
                     condition.pop("aggregation", None)
+
+        st.divider()
+        st.caption("Zmiany w polach działają od razu w bieżącej sesji. Trwały zapis następuje dopiero po użyciu przycisku poniżej.")
+        save_col, reset_col = st.columns(2)
+        if save_col.button("💾 Zapisz progi na stałe", use_container_width=True, type="primary"):
+            ok, message = save_prediction_config(result)
+            (st.success if ok else st.error)(message)
+        if reset_col.button("↩ Przywróć domyślne", use_container_width=True):
+            ok, message = reset_prediction_config()
+            if ok:
+                clear_prediction_widget_state()
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
     return result
 
 
@@ -151,7 +206,7 @@ with analysis_tab:
         min_score = st.slider("Minimalny score", 50, 150, int(base_config["recommendations"].get("min_score", 100)))
         min_quality = st.slider("Minimalna jakość danych %", 0, 100, int(base_config["recommendations"].get("min_data_quality", 100)))
         require_passed = st.checkbox("Wymagaj spełnienia warunku rynku", value=True)
-        current_config = runtime_config(base_config)
+        current_config = runtime_config(base_config, min_score, min_quality)
 
     try:
         listing, unsupported = load_listing_for_dates(dates_between(start_date, end_date))
