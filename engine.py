@@ -88,7 +88,53 @@ def _legacy_thresholds(condition: dict[str, Any]) -> tuple[float, float]:
     return float(condition.get("threshold_home", threshold)), float(condition.get("threshold_away", threshold))
 
 
+def _evaluate_1x2(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation | None:
+    rule_id = str(rule.get("id") or "")
+    if rule_id not in {"home_win", "draw", "away_win"}:
+        return None
+
+    wins = _find_metric(stats, "Win")
+    draws = _find_metric(stats, "Draw")
+    losses = _find_metric(stats, "Lose")
+    condition = (rule.get("conditions") or [{}])[0]
+    threshold_home, threshold_away = _legacy_thresholds(condition)
+    threshold = (threshold_home + threshold_away) / 2
+    op_text = condition.get("operator", ">=")
+    op = OPS[op_text]
+
+    if rule_id == "draw":
+        if draws is None:
+            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych Win/Draw/Lose potrzebnych do obliczenia rynku 1X2."])
+        left = float(draws["home"])
+        right = float(draws["away"])
+        formula = "remisy A + remisy B"
+    elif rule_id == "home_win":
+        if wins is None or losses is None:
+            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych Win/Draw/Lose potrzebnych do obliczenia rynku 1X2."])
+        left = float(wins["home"])
+        right = float(losses["away"])
+        formula = "wygrane A + porażki B"
+    else:
+        if wins is None or losses is None:
+            return Recommendation(rule_id, rule["label"], 0.0, False, ["Brak danych Win/Draw/Lose potrzebnych do obliczenia rynku 1X2."])
+        left = float(wins["away"])
+        right = float(losses["home"])
+        formula = "wygrane B + porażki A"
+
+    value = (left + right) / 2
+    passed = op(value, threshold)
+    reason = (
+        f"Stała formuła 1X2 — {formula}: ({left:.2f} + {right:.2f}) / 2 = {value:.2f} "
+        f"{op_text} średni próg {threshold:g} — {'warunek spełniony' if passed else 'warunek niespełniony'}"
+    )
+    return Recommendation(rule_id, rule["label"], 100.0 if passed else 0.0, passed, [reason])
+
+
 def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
+    fixed_1x2 = _evaluate_1x2(stats, rule)
+    if fixed_1x2 is not None:
+        return fixed_1x2
+
     conditions = rule.get("conditions", [])
     reasons: list[str] = []
     passed_checks = 0
