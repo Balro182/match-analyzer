@@ -5,7 +5,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Iterable
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -20,8 +20,55 @@ DATE_URLS = {
     2: f"{BASE_URL}/football-stats/future-days/",
 }
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; MatchAnalyzer/1.1; +browser-app)",
+    "User-Agent": "Mozilla/5.0 (compatible; AnalizatorMeczow/1.2; +browser-app)",
     "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+}
+
+COUNTRY_NAMES_PL = {
+    "WORLD": "Świat",
+    "AUSTRALIA": "Australia",
+    "BELARUS": "Białoruś",
+    "BHUTAN": "Bhutan",
+    "BOLIVIA": "Boliwia",
+    "BRAZIL": "Brazylia",
+    "BULGARIA": "Bułgaria",
+    "CHILE": "Chile",
+    "CHINA": "Chiny",
+    "ECUADOR": "Ekwador",
+    "ENGLAND": "Anglia",
+    "ESTONIA": "Estonia",
+    "FINLAND": "Finlandia",
+    "FRANCE": "Francja",
+    "GERMANY": "Niemcy",
+    "ICELAND": "Islandia",
+    "IRELAND": "Irlandia",
+    "ITALY": "Włochy",
+    "KAZAKHSTAN": "Kazachstan",
+    "LATVIA": "Łotwa",
+    "LITHUANIA": "Litwa",
+    "MACAO": "Makau",
+    "MALAWI": "Malawi",
+    "MEXICO": "Meksyk",
+    "MOLDOVA": "Mołdawia",
+    "NETHERLANDS": "Holandia",
+    "NICARAGUA": "Nikaragua",
+    "PARAGUAY": "Paragwaj",
+    "PERU": "Peru",
+    "POLAND": "Polska",
+    "PORTUGAL": "Portugalia",
+    "ROMANIA": "Rumunia",
+    "RUSSIA": "Rosja",
+    "SERBIA": "Serbia",
+    "SLOVENIA": "Słowenia",
+    "SOUTH-KOREA": "Korea Południowa",
+    "SOUTH KOREA": "Korea Południowa",
+    "SPAIN": "Hiszpania",
+    "SWEDEN": "Szwecja",
+    "SWITZERLAND": "Szwajcaria",
+    "TURKEY": "Turcja",
+    "UKRAINE": "Ukraina",
+    "URUGUAY": "Urugwaj",
+    "USA": "Stany Zjednoczone",
 }
 
 
@@ -52,6 +99,13 @@ def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
 
+def polish_country_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = clean_text(value)
+    return COUNTRY_NAMES_PL.get(cleaned.upper(), cleaned.title())
+
+
 def create_session() -> requests.Session:
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -75,22 +129,24 @@ def _parse_match_label(anchor: Tag) -> tuple[str, str] | None:
 
 
 def _classify_context_link(node: Tag) -> tuple[str | None, str | None]:
-    href = str(node.get("href", "")).lower()
+    href = str(node.get("href", ""))
     text = clean_text(node.get_text(" ", strip=True))
     if not text:
         return None, None
-    if "/football-stats/country-" in href or ("country-" in href and "tables-stats-h2h" in href):
-        return text, None
-    if "/football-stats/league-" in href or ("league-" in href and "tables-stats-h2h" in href):
+
+    slug = urlparse(urljoin(BASE_URL, href)).path.rstrip("/").split("/")[-1].lower()
+    if slug.startswith("country-"):
+        return polish_country_name(text), None
+    if slug.startswith("league-"):
         return None, text
     return None, None
 
 
 def _nearest_heading(anchor: Tag) -> tuple[str | None, str | None]:
     country = league = None
-    node = anchor
+    node: Tag | None = anchor
     for _ in range(80):
-        node = node.find_previous("a")
+        node = node.find_previous("a") if node is not None else None
         if node is None:
             break
         found_country, found_league = _classify_context_link(node)
