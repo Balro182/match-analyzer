@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from typing import Iterable
 from urllib.parse import urljoin
 
@@ -11,8 +12,15 @@ from bs4 import BeautifulSoup, Tag
 
 BASE_URL = "https://www.mutating.com"
 DEFAULT_LISTING_URL = f"{BASE_URL}/football-stats/"
+DATE_URLS = {
+    -2: f"{BASE_URL}/football-stats/before-yesterday/",
+    -1: f"{BASE_URL}/football-stats/yesterday/",
+    0: f"{BASE_URL}/football-stats/",
+    1: f"{BASE_URL}/football-stats/tomorrow/",
+    2: f"{BASE_URL}/football-stats/future-days/",
+}
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; MatchAnalyzer/1.0; +local-analysis)",
+    "User-Agent": "Mozilla/5.0 (compatible; MatchAnalyzer/1.1; +browser-app)",
     "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
 }
 
@@ -25,6 +33,7 @@ class MatchSummary:
     country: str | None
     league: str | None
     url: str
+    listing_date: str | None = None
 
 
 @dataclass
@@ -49,33 +58,56 @@ def create_session() -> requests.Session:
     return session
 
 
-def _parse_match_label(text: str) -> tuple[str, str] | None:
-    text = clean_text(text)
-    match = re.search(r"(.+?)\s+vs\.?\s+(.+?)(?:\s+stats|\s+h2h|$)", text, re.I)
-    if not match:
-        return None
-    return clean_text(match.group(1)), clean_text(match.group(2))
+def listing_url_for_date(selected_date: date, today: date | None = None) -> str | None:
+    today = today or date.today()
+    return DATE_URLS.get((selected_date - today).days)
+
+
+def _parse_match_label(anchor: Tag) -> tuple[str, str] | None:
+    candidates = [anchor.get("title", ""), anchor.get("aria-label", ""), anchor.get_text(" ", strip=True)]
+    for candidate in candidates:
+        text = clean_text(candidate)
+        match = re.search(r"(.+?)\s+vs\.?\s+(.+?)(?:\s+stats|\s+h2h|$)", text, re.I)
+        if match:
+            home = re.sub(r"^(?:[01]?\d|2[0-3]):[0-5]\d\s+", "", clean_text(match.group(1)))
+            return home, clean_text(match.group(2))
+    return None
+
+
+def _classify_context_link(node: Tag) -> tuple[str | None, str | None]:
+    href = str(node.get("href", "")).lower()
+    text = clean_text(node.get_text(" ", strip=True))
+    if not text:
+        return None, None
+    if "/football-stats/country-" in href or ("country-" in href and "tables-stats-h2h" in href):
+        return text, None
+    if "/football-stats/league-" in href or ("league-" in href and "tables-stats-h2h" in href):
+        return None, text
+    return None, None
 
 
 def _nearest_heading(anchor: Tag) -> tuple[str | None, str | None]:
     country = league = None
     node = anchor
-    for _ in range(12):
-        node = node.find_previous()
+    for _ in range(80):
+        node = node.find_previous("a")
         if node is None:
             break
-        text = clean_text(node.get_text(" ", strip=True)) if isinstance(node, Tag) else ""
-        href = node.get("href", "") if isinstance(node, Tag) else ""
-        if not league and "/football-league/" in href:
-            league = text
-        elif not country and "/football-country/" in href:
-            country = text
+        found_country, found_league = _classify_context_link(node)
+        if league is None and found_league:
+            league = found_league
+        if country is None and found_country:
+            country = found_country
         if country and league:
             break
     return country, league
 
 
-def list_matches(session: requests.Session, listing_url: str = DEFAULT_LISTING_URL) -> list[MatchSummary]:
+def list_matches(
+    session: requests.Session,
+    listing_url: str = DEFAULT_LISTING_URL,
+    listing_date: str | None = None,
+) -> list[MatchSummary]:
     response = session.get(listing_url, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "lxml")
@@ -89,7 +121,7 @@ def list_matches(session: requests.Session, listing_url: str = DEFAULT_LISTING_U
         url = urljoin(BASE_URL, href)
         if url in seen:
             continue
-        parsed = _parse_match_label(anchor.get_text(" ", strip=True) or anchor.get("title", ""))
+        parsed = _parse_match_label(anchor)
         if not parsed:
             continue
         seen.add(url)
@@ -97,8 +129,35 @@ def list_matches(session: requests.Session, listing_url: str = DEFAULT_LISTING_U
         context = clean_text(anchor.parent.get_text(" ", strip=True)) if anchor.parent else ""
         kickoff_match = re.search(r"\b([01]?\d|2[0-3]):[0-5]\d\b", context)
         country, league = _nearest_heading(anchor)
-        items.append(MatchSummary(home, away, kickoff_match.group(0) if kickoff_match else None, country, league, url))
+        items.append(
+            MatchSummary(
+                home_team=home,
+                away_team=away,
+                kickoff=kickoff_match.group(0) if kickoff_match else None,
+                country=country,
+                league=league,
+                url=url,
+                listing_date=listing_date,
+            )
+        )
     return items
+
+
+def list_matches_for_dates(session: requests.Session, selected_dates: Iterable[date]) -> tuple[list[MatchSummary], list[date]]:
+    matches: list[MatchSummary] = []
+    unsupported: list[date] = []
+    seen: set[str] = set()
+    for selected_date in selected_dates:
+        url = listing_url_for_date(selected_date)
+        if not url:
+            unsupported.append(selected_date)
+            continue
+        for match in list_matches(session, url, selected_date.isoformat()):
+            key = f"{match.url}|{match.listing_date}"
+            if key not in seen:
+                seen.add(key)
+                matches.append(match)
+    return matches, unsupported
 
 
 def _extract_teams(soup: BeautifulSoup) -> tuple[str | None, str | None]:
@@ -139,7 +198,10 @@ def _extract_stat_pairs(text: str) -> dict[str, dict[str, float]]:
 
 
 def _section_paragraphs(soup: BeautifulSoup, title: str) -> list[str]:
-    heading = soup.find(lambda tag: tag.name in {"h2", "h3"} and clean_text(tag.get_text(" ", strip=True)).lower() == title.lower())
+    heading = soup.find(
+        lambda tag: tag.name in {"h2", "h3"}
+        and clean_text(tag.get_text(" ", strip=True)).lower() == title.lower()
+    )
     if not heading:
         return []
     result: list[str] = []
@@ -170,7 +232,8 @@ def parse_match(session: requests.Session, summary: MatchSummary) -> MatchDetail
         country=summary.country,
         league=summary.league,
         url=summary.url,
-        match_date=date_match.group(1) if date_match else None,
+        listing_date=summary.listing_date,
+        match_date=date_match.group(1) if date_match else summary.listing_date,
         stats=_extract_stat_pairs(text),
         home_trends=_section_paragraphs(soup, f"{home} Trends"),
         away_trends=_section_paragraphs(soup, f"{away} Trends"),
