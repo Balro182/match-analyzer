@@ -1,27 +1,53 @@
 from __future__ import annotations
 
 import operator
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 OPS = {">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt, "==": operator.eq}
 
 METRIC_LABELS = {
+    "Goals scored per game": "Gole zdobywane na mecz",
+    "Goals conceded per game": "Gole tracone na mecz",
+    "Clean sheets": "Mecze bez straty gola",
+    "Team scored": "Drużyna strzeliła gola",
+    "Team scored twice": "Drużyna strzeliła co najmniej dwa gole",
+    "Scored in both halves": "Gol strzelony w obu połowach",
+    "Goal in both halves": "Gol w obu połowach",
+    "Win": "Zwycięstwa",
+    "Draw": "Remisy",
+    "Lose": "Porażki",
+    "Win and Over 1.5 goals": "Zwycięstwo i powyżej 1,5 gola",
+    "Lose and Over 1.5 goals": "Porażka i powyżej 1,5 gola",
+    "Team win first half": "Drużyna wygrywa pierwszą połowę",
+    "Team draw at half time": "Remis do przerwy",
+    "Team lost first half": "Drużyna przegrywa pierwszą połowę",
+    "Both Teams to Score": "Obie drużyny strzelą",
+    "BTTS in first-half": "Obie drużyny strzelą w pierwszej połowie",
+    "BBTS in second-half": "Obie drużyny strzelą w drugiej połowie",
+    "BBTS and Over 1.5": "Obie drużyny strzelą i powyżej 1,5 gola",
+    "BBTS and Over 2.5": "Obie drużyny strzelą i powyżej 2,5 gola",
+    "Win and BTTS": "Zwycięstwo i obie drużyny strzelą",
+    "Draw and BTTS": "Remis i obie drużyny strzelą",
+    "Lose and BTTS": "Porażka i obie drużyny strzelą",
     "Over 1.5 goals": "Powyżej 1,5 gola",
     "Over 2.5 goals": "Powyżej 2,5 gola",
     "Over 3.5 goals": "Powyżej 3,5 gola",
     "Under 1.5 goals": "Poniżej 1,5 gola",
     "Under 2.5 goals": "Poniżej 2,5 gola",
     "Under 3.5 goals": "Poniżej 3,5 gola",
-    "Goals scored per game": "Gole zdobywane na mecz",
-    "Goals conceded per game": "Gole tracone na mecz",
-    "Both Teams to Score": "Obie drużyny strzelą",
-    "Team scored": "Drużyna strzeliła gola",
-    "Team scored twice": "Drużyna strzeliła co najmniej dwa gole",
-    "Clean sheets": "Mecze bez straty gola",
-    "Win": "Zwycięstwa",
-    "Draw": "Remisy",
-    "Lose": "Porażki",
+    "Over 0.5 goals at half-time": "Powyżej 0,5 gola do przerwy",
+    "Over 1.5 goals at half-time": "Powyżej 1,5 gola do przerwy",
+    "Over 2.5 goals at half-time": "Powyżej 2,5 gola do przerwy",
+    "Win HT - Win FT": "Wygrana do przerwy i wygrana na koniec",
+    "Win HT - Draw FT": "Wygrana do przerwy i remis na koniec",
+    "Win HT - Lose FT": "Wygrana do przerwy i porażka na koniec",
+    "Draw HT - Win FT": "Remis do przerwy i wygrana na koniec",
+    "Draw HT - Draw FT": "Remis do przerwy i remis na koniec",
+    "Draw HT - Lose FT": "Remis do przerwy i porażka na koniec",
+    "Lose HT - Win FT": "Porażka do przerwy i wygrana na koniec",
+    "Lose HT - Draw FT": "Porażka do przerwy i remis na koniec",
+    "Lose HT - Lose FT": "Porażka do przerwy i porażka na koniec",
 }
 
 
@@ -73,7 +99,7 @@ def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
         translated_name = metric_label(metric_name)
         metric = _find_metric(stats, metric_name)
         if metric is None:
-            reasons.append(f"Brak danych dla metryki: {translated_name}")
+            reasons.append(f"Brak danych dla statystyki: {translated_name}")
             continue
         value = _condition_value(metric, condition)
         op_text = condition.get("operator", ">=")
