@@ -6,6 +6,24 @@ from typing import Any
 
 OPS = {">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt, "==": operator.eq}
 
+METRIC_LABELS = {
+    "Over 1.5 goals": "Powyżej 1,5 gola",
+    "Over 2.5 goals": "Powyżej 2,5 gola",
+    "Over 3.5 goals": "Powyżej 3,5 gola",
+    "Under 1.5 goals": "Poniżej 1,5 gola",
+    "Under 2.5 goals": "Poniżej 2,5 gola",
+    "Under 3.5 goals": "Poniżej 3,5 gola",
+    "Goals scored per game": "Gole zdobywane na mecz",
+    "Goals conceded per game": "Gole tracone na mecz",
+    "Both Teams to Score": "Obie drużyny strzelą",
+    "Team scored": "Drużyna strzeliła gola",
+    "Team scored twice": "Drużyna strzeliła co najmniej dwa gole",
+    "Clean sheets": "Mecze bez straty gola",
+    "Win": "Zwycięstwa",
+    "Draw": "Remisy",
+    "Lose": "Porażki",
+}
+
 
 @dataclass
 class Recommendation:
@@ -17,6 +35,10 @@ class Recommendation:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def metric_label(name: str) -> str:
+    return METRIC_LABELS.get(name, name)
 
 
 def _find_metric(stats: dict[str, dict[str, float]], requested: str) -> dict[str, float] | None:
@@ -48,16 +70,20 @@ def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> R
     reasons: list[str] = []
     for condition in conditions:
         metric_name = condition["metric"]
+        translated_name = metric_label(metric_name)
         metric = _find_metric(stats, metric_name)
         if metric is None:
-            reasons.append(f"Brak metryki: {metric_name}")
+            reasons.append(f"Brak danych dla metryki: {translated_name}")
             continue
         value = _condition_value(metric, condition)
         op_text = condition.get("operator", ">=")
         threshold = float(condition["threshold"])
         passed = OPS[op_text](value, threshold)
         passed_count += int(passed)
-        reasons.append(f"{metric_name}: {value:.2f} {op_text} {threshold:g} — {'OK' if passed else 'NIE'}")
+        reasons.append(
+            f"{translated_name}: {value:.2f} {op_text} {threshold:g} — "
+            f"{'warunek spełniony' if passed else 'warunek niespełniony'}"
+        )
     score = 100.0 * passed_count / len(conditions) if conditions else 0.0
     return Recommendation(rule["id"], rule["label"], score, bool(conditions) and passed_count == len(conditions), reasons)
 
