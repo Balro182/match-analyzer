@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 OPS = {">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt, "==": operator.eq}
-ALGORITHM_VERSION = "2.0.0"
+ALGORITHM_VERSION = "2.1.0"
 
 METRIC_LABELS = {
     "Goals scored per game": "Średnia bramek zdobytych",
@@ -137,8 +137,76 @@ def _special_average(
     return Recommendation(rule["id"], rule["label"], score, passed, [reason], 100.0, value, threshold, "special")
 
 
+def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
+    condition = (rule.get("conditions") or [{}])[0]
+    required = {
+        "Both Teams to Score": _find_metric(stats, "Both Teams to Score"),
+        "Team scored": _find_metric(stats, "Team scored"),
+        "Under 2.5 goals": _find_metric(stats, "Under 2.5 goals"),
+    }
+    missing = [name for name, data in required.items() if data is None]
+    if missing:
+        return Recommendation(
+            rule["id"],
+            rule["label"],
+            0.0,
+            False,
+            ["Brak danych do formuły BTTS: " + ", ".join(missing)],
+            100.0 * (len(required) - len(missing)) / len(required),
+            mode="special",
+        )
+
+    btts = required["Both Teams to Score"]
+    team_scored = required["Team scored"]
+    under25 = required["Under 2.5 goals"]
+    assert btts is not None and team_scored is not None and under25 is not None
+
+    btts_home = float(btts["home"])
+    btts_away = float(btts["away"])
+    btts_mean = (btts_home + btts_away) / 2
+    btts_minimum = min(btts_home, btts_away)
+    team_scored_home = float(team_scored["home"])
+    team_scored_away = float(team_scored["away"])
+    under25_mean = (float(under25["home"]) + float(under25["away"])) / 2
+
+    threshold_home, threshold_away = _thresholds(condition)
+    mean_threshold = (threshold_home + threshold_away) / 2
+    minimum_btts = float(condition.get("minimum_btts", 45))
+    minimum_team_scored = float(condition.get("minimum_team_scored", 70))
+    maximum_under25 = float(condition.get("maximum_under25", 65))
+
+    checks = {
+        "średnia BTTS": btts_mean >= mean_threshold,
+        "minimum BTTS": btts_minimum >= minimum_btts,
+        "Team scored A": team_scored_home >= minimum_team_scored,
+        "Team scored B": team_scored_away >= minimum_team_scored,
+        "średni Under 2,5": under25_mean < maximum_under25,
+    }
+    passed = all(checks.values())
+
+    component_scores = [
+        _strength(btts_mean, mean_threshold, ">="),
+        _strength(btts_minimum, minimum_btts, ">="),
+        _strength(team_scored_home, minimum_team_scored, ">="),
+        _strength(team_scored_away, minimum_team_scored, ">="),
+        _strength(under25_mean, maximum_under25, "<"),
+    ]
+    score = round(sum(component_scores) / len(component_scores), 1)
+    reasons = [
+        f"BTTS średnia: ({btts_home:.1f} + {btts_away:.1f}) / 2 = {btts_mean:.1f}, próg {mean_threshold:g}",
+        f"BTTS słabszej strony: {btts_minimum:.1f}, minimum {minimum_btts:g}",
+        f"Team scored: A {team_scored_home:.1f}, B {team_scored_away:.1f}, minimum {minimum_team_scored:g}",
+        f"Średni Under 2,5: {under25_mean:.1f}, wymagane poniżej {maximum_under25:g}",
+        "Warunki: " + ", ".join(f"{name}={'TAK' if value else 'NIE'}" for name, value in checks.items()),
+    ]
+    return Recommendation(rule["id"], rule["label"], score, passed, reasons, 100.0, btts_mean, mean_threshold, "special")
+
+
 def _evaluate_special(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation | None:
     rule_id = str(rule.get("id") or "")
+    if rule_id == "btts":
+        return _evaluate_btts(stats, rule)
+
     formulas = {
         "home_win": ("Win", "home", "Lose", "away", "wygrane A + porażki B"),
         "draw": ("Draw", "home", "Draw", "away", "remisy A + remisy B"),
