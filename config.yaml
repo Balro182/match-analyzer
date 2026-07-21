@@ -6,6 +6,10 @@ source:
 recommendations:
   min_score: 100
   min_data_quality: 100
+  goal_data_consistency:
+    maximum_4plus_gap: 20
+    over_quality_cap: 80
+    extreme_goals_warning: 3.0
   rules:
     - {id: avg_scored, label: "Średnia bramek zdobytych (wskaźnik)", enabled: false, mode: both, conditions: [{metric: "Goals scored per game", operator: ">=", threshold_home: 1.5, threshold_away: 1.5}]}
     - {id: avg_conceded, label: "Średnia bramek straconych (wskaźnik)", enabled: false, mode: mean, conditions: [{metric: "Goals conceded per game", operator: ">=", threshold_home: 1.2, threshold_away: 1.2}]}
