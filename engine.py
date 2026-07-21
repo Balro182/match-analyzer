@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 OPS = {">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt, "==": operator.eq}
-ALGORITHM_VERSION = "2.2.0"
+ALGORITHM_VERSION = "2.3.0"
 
 METRIC_LABELS = {
     "Goals scored per game": "Średnia bramek zdobytych",
@@ -97,7 +97,6 @@ def _thresholds(condition: dict[str, Any]) -> tuple[float, float]:
 
 
 def _strength(value: float, threshold: float, op_text: str) -> float:
-    """Ciągły score: 100 oznacza dokładnie próg, >100 oznacza zapas."""
     threshold = max(abs(threshold), 0.0001)
     if op_text in {">=", ">"}:
         return max(0.0, min(150.0, value / threshold * 100.0))
@@ -175,11 +174,8 @@ def _btts_profile(stats: dict[str, dict[str, float]], condition: dict[str, Any])
 
 def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
     condition = (rule.get("conditions") or [{}])[0]
-    required = {
-        "Both Teams to Score": _find_metric(stats, "Both Teams to Score"),
-        "Team scored": _find_metric(stats, "Team scored"),
-        "Under 2.5 goals": _find_metric(stats, "Under 2.5 goals"),
-    }
+    required_names = ["Both Teams to Score", "Team scored", "Under 2.5 goals"]
+    required = {name: _find_metric(stats, name) for name in required_names}
     missing = [name for name, data in required.items() if data is None]
     if missing:
         return Recommendation(
@@ -219,6 +215,15 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     score = round(sum(component_scores) / len(component_scores), 1)
     reasons.append("Warunki: " + ", ".join(f"{name}={'TAK' if value else 'NIE'}" for name, value in checks.items()))
     return Recommendation(rule["id"], rule["label"], score, all(checks.values()), reasons, 100.0, btts_mean, mean_threshold, "special")
+
+
+def _winner_base(stats: dict[str, dict[str, float]], winner_side: str) -> float | None:
+    win = _find_metric(stats, "Win")
+    lose = _find_metric(stats, "Lose")
+    if win is None or lose is None:
+        return None
+    loser_side = "away" if winner_side == "home" else "home"
+    return (float(win[winner_side]) + float(lose[loser_side])) / 2
 
 
 def _evaluate_guarded_winner(stats: dict[str, dict[str, float]], rule: dict[str, Any], winner_side: str) -> Recommendation:
@@ -299,6 +304,82 @@ def _evaluate_guarded_winner(stats: dict[str, dict[str, float]], rule: dict[str,
     return Recommendation(rule["id"], rule["label"], score, all(checks.values()), reasons, 100.0, base, base_threshold, "special")
 
 
+def _evaluate_guarded_draw(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
+    condition = (rule.get("conditions") or [{}])[0]
+    required_names = ["Draw", "Win", "Lose", "Under 3.5 goals", "Team draw at half time"]
+    required = {name: _find_metric(stats, name) for name in required_names}
+    missing = [name for name, data in required.items() if data is None]
+    if missing:
+        return Recommendation(
+            rule["id"], rule["label"], 0.0, False,
+            ["Brak danych do złożonej reguły remisu: " + ", ".join(missing)],
+            100.0 * (len(required) - len(missing)) / len(required), mode="special",
+        )
+
+    draw = required["Draw"]
+    under35 = required["Under 3.5 goals"]
+    draw_ht = required["Team draw at half time"]
+    assert draw is not None and under35 is not None and draw_ht is not None
+
+    draw_mean = (float(draw["home"]) + float(draw["away"])) / 2
+    home_base = _winner_base(stats, "home")
+    away_base = _winner_base(stats, "away")
+    assert home_base is not None and away_base is not None
+    base_gap = abs(home_base - away_base)
+    strongest_base = max(home_base, away_base)
+    under35_mean = (float(under35["home"]) + float(under35["away"])) / 2
+    draw_ht_mean = (float(draw_ht["home"]) + float(draw_ht["away"])) / 2
+
+    primary_draw = float(condition.get("primary_draw", 35))
+    primary_max_gap = float(condition.get("primary_max_gap", 25))
+    low_draw = float(condition.get("low_draw", 30))
+    low_under35 = float(condition.get("low_under35", 70))
+    low_draw_ht = float(condition.get("low_draw_ht", 45))
+    maximum_winner_base = float(condition.get("maximum_winner_base", 55))
+    guarded_winner_threshold = float(condition.get("guarded_winner_threshold", 60))
+
+    no_guarded_winner = strongest_base < guarded_winner_threshold
+    primary_checks = {
+        "średnia Draw": draw_mean >= primary_draw,
+        "brak zabezpieczonego zwycięzcy": no_guarded_winner,
+        "różnica baz": base_gap <= primary_max_gap,
+    }
+    low_checks = {
+        "średnia Draw": draw_mean >= low_draw,
+        "średni Under 3,5": under35_mean >= low_under35,
+        "średni remis HT": draw_ht_mean >= low_draw_ht,
+        "brak mocnej bazy zwycięstwa": strongest_base < maximum_winner_base,
+    }
+    primary_passed = all(primary_checks.values())
+    low_passed = all(low_checks.values())
+    passed = primary_passed or low_passed
+
+    primary_score = sum([
+        _strength(draw_mean, primary_draw, ">="),
+        100.0 if no_guarded_winner else 0.0,
+        _strength(base_gap, primary_max_gap, "<="),
+    ]) / 3
+    low_score = sum([
+        _strength(draw_mean, low_draw, ">="),
+        _strength(under35_mean, low_under35, ">="),
+        _strength(draw_ht_mean, low_draw_ht, ">="),
+        _strength(strongest_base, maximum_winner_base, "<"),
+    ]) / 4
+    score = round(max(primary_score, low_score), 1)
+
+    reasons = [
+        f"Średnia Draw: {draw_mean:.1f}; ścieżka A próg {primary_draw:g}, ścieżka B próg {low_draw:g}",
+        f"Bazy zwycięstwa: A {home_base:.1f}, B {away_base:.1f}; różnica {base_gap:.1f}, maksimum A {primary_max_gap:g}",
+        f"Średni Under 3,5: {under35_mean:.1f}, minimum B {low_under35:g}",
+        f"Średni remis HT: {draw_ht_mean:.1f}, minimum B {low_draw_ht:g}",
+        "Ścieżka A: " + ", ".join(f"{name}={'TAK' if value else 'NIE'}" for name, value in primary_checks.items()),
+        "Ścieżka B: " + ", ".join(f"{name}={'TAK' if value else 'NIE'}" for name, value in low_checks.items()),
+        f"Aktywna ścieżka: {'A — podstawowa' if primary_passed else 'B — niskobramkowa' if low_passed else 'brak'}",
+    ]
+    threshold = primary_draw if primary_passed or draw_mean >= primary_draw else low_draw
+    return Recommendation(rule["id"], rule["label"], score, passed, reasons, 100.0, draw_mean, threshold, "special")
+
+
 def _evaluate_special(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation | None:
     rule_id = str(rule.get("id") or "")
     if rule_id == "btts":
@@ -307,9 +388,10 @@ def _evaluate_special(stats: dict[str, dict[str, float]], rule: dict[str, Any]) 
         return _evaluate_guarded_winner(stats, rule, "home")
     if rule_id == "away_win":
         return _evaluate_guarded_winner(stats, rule, "away")
+    if rule_id == "draw":
+        return _evaluate_guarded_draw(stats, rule)
 
     formulas = {
-        "draw": ("Draw", "home", "Draw", "away", "remisy A + remisy B"),
         "home_win_ht": ("Team win first half", "home", "Team lost first half", "away", "wygrane A do przerwy + porażki B do przerwy"),
         "draw_ht": ("Team draw at half time", "home", "Team draw at half time", "away", "remisy obu drużyn do przerwy"),
         "away_win_ht": ("Team win first half", "away", "Team lost first half", "home", "wygrane B do przerwy + porażki A do przerwy"),
