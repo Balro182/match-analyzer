@@ -60,3 +60,76 @@ def test_missing_metric_reduces_data_quality():
     result = evaluate_rule({}, rule)
     assert result.data_quality == 0
     assert result.passed is False
+
+
+def btts_rule():
+    return {
+        "id": "btts",
+        "label": "Obie drużyny strzelą",
+        "mode": "special",
+        "conditions": [
+            {
+                "metric": "Both Teams to Score",
+                "operator": ">=",
+                "threshold_home": 55,
+                "threshold_away": 55,
+                "minimum_btts": 45,
+                "minimum_team_scored": 70,
+                "maximum_under25": 65,
+            }
+        ],
+    }
+
+
+def test_btts_accepts_balanced_60_50_profile():
+    stats = {
+        "Both Teams to Score": {"home": 60, "away": 50},
+        "Team scored": {"home": 90, "away": 90},
+        "Under 2.5 goals": {"home": 40, "away": 40},
+    }
+    result = evaluate_rule(stats, btts_rule())
+    assert result.raw_value == 55
+    assert result.passed is True
+    assert result.data_quality == 100
+
+
+def test_btts_accepts_asymmetric_50_90_profile():
+    stats = {
+        "Both Teams to Score": {"home": 50, "away": 90},
+        "Team scored": {"home": 90, "away": 90},
+        "Under 2.5 goals": {"home": 40, "away": 10},
+    }
+    result = evaluate_rule(stats, btts_rule())
+    assert result.raw_value == 70
+    assert result.passed is True
+
+
+def test_btts_rejects_80_30_despite_mean_55():
+    stats = {
+        "Both Teams to Score": {"home": 80, "away": 30},
+        "Team scored": {"home": 90, "away": 90},
+        "Under 2.5 goals": {"home": 40, "away": 40},
+    }
+    result = evaluate_rule(stats, btts_rule())
+    assert result.raw_value == 55
+    assert result.passed is False
+
+
+def test_btts_rejects_high_under25_profile():
+    stats = {
+        "Both Teams to Score": {"home": 70, "away": 50},
+        "Team scored": {"home": 80, "away": 80},
+        "Under 2.5 goals": {"home": 70, "away": 70},
+    }
+    result = evaluate_rule(stats, btts_rule())
+    assert result.passed is False
+
+
+def test_btts_requires_all_supporting_metrics():
+    stats = {
+        "Both Teams to Score": {"home": 60, "away": 60},
+        "Team scored": {"home": 80, "away": 80},
+    }
+    result = evaluate_rule(stats, btts_rule())
+    assert result.passed is False
+    assert round(result.data_quality, 1) == 66.7
