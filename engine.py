@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 OPS = {">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt, "==": operator.eq}
-ALGORITHM_VERSION = "2.1.0"
+ALGORITHM_VERSION = "2.2.0"
 
 METRIC_LABELS = {
     "Goals scored per game": "Średnia bramek zdobytych",
@@ -137,6 +137,42 @@ def _special_average(
     return Recommendation(rule["id"], rule["label"], score, passed, [reason], 100.0, value, threshold, "special")
 
 
+def _btts_profile(stats: dict[str, dict[str, float]], condition: dict[str, Any]) -> tuple[dict[str, bool], list[str]] | None:
+    btts = _find_metric(stats, "Both Teams to Score")
+    team_scored = _find_metric(stats, "Team scored")
+    under25 = _find_metric(stats, "Under 2.5 goals")
+    if btts is None or team_scored is None or under25 is None:
+        return None
+
+    btts_home = float(btts["home"])
+    btts_away = float(btts["away"])
+    btts_mean = (btts_home + btts_away) / 2
+    btts_minimum = min(btts_home, btts_away)
+    team_scored_home = float(team_scored["home"])
+    team_scored_away = float(team_scored["away"])
+    under25_mean = (float(under25["home"]) + float(under25["away"])) / 2
+    threshold_home, threshold_away = _thresholds(condition)
+    mean_threshold = (threshold_home + threshold_away) / 2
+    minimum_btts = float(condition.get("minimum_btts", 45))
+    minimum_team_scored = float(condition.get("minimum_team_scored", 70))
+    maximum_under25 = float(condition.get("maximum_under25", 65))
+
+    checks = {
+        "średnia BTTS": btts_mean >= mean_threshold,
+        "minimum BTTS": btts_minimum >= minimum_btts,
+        "Team scored A": team_scored_home >= minimum_team_scored,
+        "Team scored B": team_scored_away >= minimum_team_scored,
+        "średni Under 2,5": under25_mean < maximum_under25,
+    }
+    values = [
+        f"BTTS średnia: ({btts_home:.1f} + {btts_away:.1f}) / 2 = {btts_mean:.1f}, próg {mean_threshold:g}",
+        f"BTTS słabszej strony: {btts_minimum:.1f}, minimum {minimum_btts:g}",
+        f"Team scored: A {team_scored_home:.1f}, B {team_scored_away:.1f}, minimum {minimum_team_scored:g}",
+        f"Średni Under 2,5: {under25_mean:.1f}, wymagane poniżej {maximum_under25:g}",
+    ]
+    return checks, values
+
+
 def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
     condition = (rule.get("conditions") or [{}])[0]
     required = {
@@ -147,13 +183,9 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     missing = [name for name, data in required.items() if data is None]
     if missing:
         return Recommendation(
-            rule["id"],
-            rule["label"],
-            0.0,
-            False,
+            rule["id"], rule["label"], 0.0, False,
             ["Brak danych do formuły BTTS: " + ", ".join(missing)],
-            100.0 * (len(required) - len(missing)) / len(required),
-            mode="special",
+            100.0 * (len(required) - len(missing)) / len(required), mode="special",
         )
 
     btts = required["Both Teams to Score"]
@@ -168,22 +200,15 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     team_scored_home = float(team_scored["home"])
     team_scored_away = float(team_scored["away"])
     under25_mean = (float(under25["home"]) + float(under25["away"])) / 2
-
     threshold_home, threshold_away = _thresholds(condition)
     mean_threshold = (threshold_home + threshold_away) / 2
     minimum_btts = float(condition.get("minimum_btts", 45))
     minimum_team_scored = float(condition.get("minimum_team_scored", 70))
     maximum_under25 = float(condition.get("maximum_under25", 65))
 
-    checks = {
-        "średnia BTTS": btts_mean >= mean_threshold,
-        "minimum BTTS": btts_minimum >= minimum_btts,
-        "Team scored A": team_scored_home >= minimum_team_scored,
-        "Team scored B": team_scored_away >= minimum_team_scored,
-        "średni Under 2,5": under25_mean < maximum_under25,
-    }
-    passed = all(checks.values())
-
+    profile = _btts_profile(stats, condition)
+    assert profile is not None
+    checks, reasons = profile
     component_scores = [
         _strength(btts_mean, mean_threshold, ">="),
         _strength(btts_minimum, minimum_btts, ">="),
@@ -192,25 +217,99 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
         _strength(under25_mean, maximum_under25, "<"),
     ]
     score = round(sum(component_scores) / len(component_scores), 1)
+    reasons.append("Warunki: " + ", ".join(f"{name}={'TAK' if value else 'NIE'}" for name, value in checks.items()))
+    return Recommendation(rule["id"], rule["label"], score, all(checks.values()), reasons, 100.0, btts_mean, mean_threshold, "special")
+
+
+def _evaluate_guarded_winner(stats: dict[str, dict[str, float]], rule: dict[str, Any], winner_side: str) -> Recommendation:
+    condition = (rule.get("conditions") or [{}])[0]
+    loser_side = "away" if winner_side == "home" else "home"
+    required_names = ["Win", "Lose", "Goals scored per game", "Goals conceded per game", "Team scored"]
+    required = {name: _find_metric(stats, name) for name in required_names}
+    missing = [name for name, data in required.items() if data is None]
+    if missing:
+        return Recommendation(
+            rule["id"], rule["label"], 0.0, False,
+            ["Brak danych do zabezpieczonej reguły 1X2: " + ", ".join(missing)],
+            100.0 * (len(required) - len(missing)) / len(required), mode="special",
+        )
+
+    win = required["Win"]
+    lose = required["Lose"]
+    scored = required["Goals scored per game"]
+    conceded = required["Goals conceded per game"]
+    team_scored = required["Team scored"]
+    assert win is not None and lose is not None and scored is not None and conceded is not None and team_scored is not None
+
+    own_win = float(win[winner_side])
+    opponent_lose = float(lose[loser_side])
+    base = (own_win + opponent_lose) / 2
+    own_goals = float(scored[winner_side])
+    opponent_conceded = float(conceded[loser_side])
+    opponent_goals = float(scored[loser_side])
+    opponent_team_scored = float(team_scored[loser_side])
+
+    threshold_home, threshold_away = _thresholds(condition)
+    base_threshold = threshold_home if winner_side == "home" else threshold_away
+    minimum_own_win = float(condition.get("minimum_own_win", 50))
+    minimum_opponent_lose = float(condition.get("minimum_opponent_lose", 50))
+    minimum_own_goals = float(condition.get("minimum_own_goals", 1.4))
+    minimum_opponent_conceded = float(condition.get("minimum_opponent_conceded", 1.3))
+    volatility_opponent_goals = float(condition.get("volatility_opponent_goals", 1.5))
+    volatility_team_scored = float(condition.get("volatility_team_scored", 80))
+
+    btts_condition = {
+        "threshold_home": float(condition.get("btts_mean_threshold", 55)),
+        "threshold_away": float(condition.get("btts_mean_threshold", 55)),
+        "minimum_btts": float(condition.get("btts_minimum", 45)),
+        "minimum_team_scored": float(condition.get("btts_minimum_team_scored", 70)),
+        "maximum_under25": float(condition.get("btts_maximum_under25", 65)),
+    }
+    btts_profile = _btts_profile(stats, btts_condition)
+    btts_passed = bool(btts_profile and all(btts_profile[0].values()))
+    volatility_block = btts_passed and opponent_goals >= volatility_opponent_goals and opponent_team_scored >= volatility_team_scored
+
+    checks = {
+        "baza Win/Lose": base >= base_threshold,
+        "własne zwycięstwa": own_win >= minimum_own_win,
+        "porażki rywala": opponent_lose >= minimum_opponent_lose,
+        "gole zwycięzcy": own_goals >= minimum_own_goals,
+        "gole tracone rywala": opponent_conceded >= minimum_opponent_conceded,
+        "brak blokady zmienności": not volatility_block,
+    }
+    component_scores = [
+        _strength(base, base_threshold, ">="),
+        _strength(own_win, minimum_own_win, ">="),
+        _strength(opponent_lose, minimum_opponent_lose, ">="),
+        _strength(own_goals, minimum_own_goals, ">="),
+        _strength(opponent_conceded, minimum_opponent_conceded, ">="),
+        100.0 if not volatility_block else 0.0,
+    ]
+    score = round(sum(component_scores) / len(component_scores), 1)
+    side_label = "A" if winner_side == "home" else "B"
+    opponent_label = "B" if winner_side == "home" else "A"
     reasons = [
-        f"BTTS średnia: ({btts_home:.1f} + {btts_away:.1f}) / 2 = {btts_mean:.1f}, próg {mean_threshold:g}",
-        f"BTTS słabszej strony: {btts_minimum:.1f}, minimum {minimum_btts:g}",
-        f"Team scored: A {team_scored_home:.1f}, B {team_scored_away:.1f}, minimum {minimum_team_scored:g}",
-        f"Średni Under 2,5: {under25_mean:.1f}, wymagane poniżej {maximum_under25:g}",
+        f"Baza {side_label}: (Win {side_label} {own_win:.1f} + Lose {opponent_label} {opponent_lose:.1f}) / 2 = {base:.1f}, próg {base_threshold:g}",
+        f"Ofensywa {side_label}: {own_goals:.2f} gola/mecz, minimum {minimum_own_goals:g}",
+        f"Defensywa {opponent_label}: {opponent_conceded:.2f} gola straconego/mecz, minimum {minimum_opponent_conceded:g}",
+        f"Ryzyko rywala: gole {opponent_goals:.2f}, Team scored {opponent_team_scored:.1f}, BTTS={'TAK' if btts_passed else 'NIE'}",
+        f"Blokada zmienności: {'TAK' if volatility_block else 'NIE'}",
         "Warunki: " + ", ".join(f"{name}={'TAK' if value else 'NIE'}" for name, value in checks.items()),
     ]
-    return Recommendation(rule["id"], rule["label"], score, passed, reasons, 100.0, btts_mean, mean_threshold, "special")
+    return Recommendation(rule["id"], rule["label"], score, all(checks.values()), reasons, 100.0, base, base_threshold, "special")
 
 
 def _evaluate_special(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation | None:
     rule_id = str(rule.get("id") or "")
     if rule_id == "btts":
         return _evaluate_btts(stats, rule)
+    if rule_id == "home_win":
+        return _evaluate_guarded_winner(stats, rule, "home")
+    if rule_id == "away_win":
+        return _evaluate_guarded_winner(stats, rule, "away")
 
     formulas = {
-        "home_win": ("Win", "home", "Lose", "away", "wygrane A + porażki B"),
         "draw": ("Draw", "home", "Draw", "away", "remisy A + remisy B"),
-        "away_win": ("Win", "away", "Lose", "home", "wygrane B + porażki A"),
         "home_win_ht": ("Team win first half", "home", "Team lost first half", "away", "wygrane A do przerwy + porażki B do przerwy"),
         "draw_ht": ("Team draw at half time", "home", "Team draw at half time", "away", "remisy obu drużyn do przerwy"),
         "away_win_ht": ("Team win first half", "away", "Team lost first half", "home", "wygrane B do przerwy + porażki A do przerwy"),
