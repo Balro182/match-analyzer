@@ -176,3 +176,77 @@ def test_btts_requires_all_supporting_metrics():
     result = evaluate_rule(stats, btts_rule())
     assert result.passed is False
     assert round(result.data_quality, 1) == 66.7
+
+
+def draw_rule():
+    return {
+        "id": "draw",
+        "label": "Remis",
+        "mode": "special",
+        "conditions": [
+            {
+                "metric": "Draw",
+                "operator": ">=",
+                "threshold_home": 35,
+                "threshold_away": 35,
+                "primary_draw": 35,
+                "primary_max_gap": 25,
+                "low_draw": 30,
+                "low_under35": 70,
+                "low_draw_ht": 45,
+                "maximum_winner_base": 55,
+                "guarded_winner_threshold": 60,
+            }
+        ],
+    }
+
+
+def test_draw_accepts_jaro_inter_through_primary_path():
+    stats = {
+        "Draw": {"home": 50, "away": 40},
+        "Win": {"home": 20, "away": 50},
+        "Lose": {"home": 30, "away": 10},
+        "Under 3.5 goals": {"home": 70, "away": 60},
+        "Team draw at half time": {"home": 30, "away": 30},
+    }
+    result = evaluate_rule(stats, draw_rule())
+    assert result.raw_value == 45
+    assert result.passed is True
+    assert any("A — podstawowa" in reason for reason in result.reasons)
+
+
+def test_draw_accepts_botev_cherno_more_through_low_scoring_path():
+    stats = {
+        "Draw": {"home": 30, "away": 30},
+        "Win": {"home": 60, "away": 40},
+        "Lose": {"home": 10, "away": 30},
+        "Under 3.5 goals": {"home": 80, "away": 90},
+        "Team draw at half time": {"home": 70, "away": 50},
+    }
+    result = evaluate_rule(stats, draw_rule())
+    assert result.raw_value == 30
+    assert result.passed is True
+    assert any("B — niskobramkowa" in reason for reason in result.reasons)
+
+
+def test_draw_rejects_low_draw_without_defensive_support():
+    stats = {
+        "Draw": {"home": 30, "away": 30},
+        "Win": {"home": 50, "away": 40},
+        "Lose": {"home": 30, "away": 30},
+        "Under 3.5 goals": {"home": 50, "away": 50},
+        "Team draw at half time": {"home": 30, "away": 30},
+    }
+    result = evaluate_rule(stats, draw_rule())
+    assert result.passed is False
+
+
+def test_draw_requires_all_supporting_metrics():
+    stats = {
+        "Draw": {"home": 40, "away": 40},
+        "Win": {"home": 30, "away": 30},
+        "Lose": {"home": 30, "away": 30},
+    }
+    result = evaluate_rule(stats, draw_rule())
+    assert result.passed is False
+    assert result.data_quality < 100
