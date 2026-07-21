@@ -1,40 +1,83 @@
 from engine import evaluate_rule
 
 
-def test_home_win_uses_win_a_and_lose_b_average():
-    stats = {
-        "Win": {"home": 80, "away": 100},
-        "Draw": {"home": 0, "away": 0},
-        "Lose": {"home": 20, "away": 0},
-    }
-    rule = {
-        "id": "home_win",
-        "label": "Wygra A",
+def winner_rule(rule_id: str):
+    return {
+        "id": rule_id,
+        "label": "Wygra A" if rule_id == "home_win" else "Wygra B",
         "mode": "special",
-        "conditions": [{"metric": "Win", "operator": ">=", "threshold_home": 55, "threshold_away": 55}],
+        "conditions": [
+            {
+                "metric": "Win",
+                "operator": ">=",
+                "threshold_home": 60,
+                "threshold_away": 60,
+                "minimum_own_win": 50,
+                "minimum_opponent_lose": 50,
+                "minimum_own_goals": 1.4,
+                "minimum_opponent_conceded": 1.3,
+                "volatility_opponent_goals": 1.5,
+                "volatility_team_scored": 80,
+            }
+        ],
     }
-    result = evaluate_rule(stats, rule)
-    assert result.raw_value == 40
-    assert result.passed is False
-    assert round(result.score, 1) == 72.7
 
 
-def test_away_win_uses_win_b_and_lose_a_average():
+def test_home_win_accepts_corvinul_profile():
     stats = {
-        "Win": {"home": 80, "away": 100},
-        "Draw": {"home": 0, "away": 0},
-        "Lose": {"home": 20, "away": 0},
+        "Win": {"home": 60, "away": 20},
+        "Lose": {"home": 10, "away": 60},
+        "Goals scored per game": {"home": 1.5, "away": 0.8},
+        "Goals conceded per game": {"home": 0.6, "away": 1.8},
+        "Team scored": {"home": 90, "away": 60},
+        "Both Teams to Score": {"home": 40, "away": 50},
+        "Under 2.5 goals": {"home": 70, "away": 50},
     }
-    rule = {
-        "id": "away_win",
-        "label": "Wygra B",
-        "mode": "special",
-        "conditions": [{"metric": "Win", "operator": ">=", "threshold_home": 55, "threshold_away": 55}],
-    }
-    result = evaluate_rule(stats, rule)
+    result = evaluate_rule(stats, winner_rule("home_win"))
     assert result.raw_value == 60
     assert result.passed is True
-    assert result.score > 100
+    assert result.data_quality == 100
+
+
+def test_home_win_blocks_turku_profile_due_to_opponent_volatility():
+    stats = {
+        "Win": {"home": 70, "away": 20},
+        "Lose": {"home": 20, "away": 50},
+        "Goals scored per game": {"home": 1.8, "away": 1.7},
+        "Goals conceded per game": {"home": 0.9, "away": 2.0},
+        "Team scored": {"home": 100, "away": 80},
+        "Both Teams to Score": {"home": 50, "away": 70},
+        "Under 2.5 goals": {"home": 40, "away": 20},
+    }
+    result = evaluate_rule(stats, winner_rule("home_win"))
+    assert result.raw_value == 60
+    assert result.passed is False
+    assert any("Blokada zmienności: TAK" in reason for reason in result.reasons)
+
+
+def test_away_win_is_symmetric():
+    stats = {
+        "Win": {"home": 20, "away": 60},
+        "Lose": {"home": 60, "away": 20},
+        "Goals scored per game": {"home": 0.8, "away": 1.5},
+        "Goals conceded per game": {"home": 1.8, "away": 0.6},
+        "Team scored": {"home": 60, "away": 90},
+        "Both Teams to Score": {"home": 40, "away": 50},
+        "Under 2.5 goals": {"home": 50, "away": 70},
+    }
+    result = evaluate_rule(stats, winner_rule("away_win"))
+    assert result.raw_value == 60
+    assert result.passed is True
+
+
+def test_guarded_winner_requires_supporting_metrics():
+    stats = {
+        "Win": {"home": 70, "away": 20},
+        "Lose": {"home": 20, "away": 60},
+    }
+    result = evaluate_rule(stats, winner_rule("home_win"))
+    assert result.passed is False
+    assert result.data_quality < 100
 
 
 def test_continuous_score_distinguishes_small_and_large_margin():
