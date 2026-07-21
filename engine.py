@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import engine_core as core
 
-ALGORITHM_VERSION = "2.4.0"
+ALGORITHM_VERSION = "2.5.0"
 METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
+
+EXACT_TOTAL_RULE_IDS = {"total0", "total1", "total2", "total3", "total4", "total01", "total23", "total4plus"}
+OVER_QUALITY_RULE_IDS = {"over25", "over35"}
 
 
 def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
@@ -117,12 +121,82 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     )
 
 
-def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
+def _goal_data_conflicts(
+    stats: dict[str, dict[str, float]],
+    consistency_config: dict[str, Any] | None = None,
+) -> list[str]:
+    settings = consistency_config or {}
+    max_gap = float(settings.get("maximum_4plus_gap", 20))
+    under35 = core._find_metric(stats, "Under 3.5 goals")
+    reported_4plus = core._find_metric(stats, "Match total goals 4+")
+    exact4 = core._find_metric(stats, "Match total goals 4")
+    if under35 is None or reported_4plus is None:
+        return []
+
+    conflicts: list[str] = []
+    for side, label in (("home", "A"), ("away", "B")):
+        derived_4plus = 100.0 - float(under35[side])
+        reported = float(reported_4plus[side])
+        gap = abs(derived_4plus - reported)
+        if gap > max_gap:
+            conflicts.append(
+                f"strona {label}: 4+ z Under 3,5 = {derived_4plus:.1f}%, podane 4+ = {reported:.1f}%, różnica {gap:.1f} pp"
+            )
+        if exact4 is not None and float(exact4[side]) > reported:
+            conflicts.append(
+                f"strona {label}: dokładnie 4 gole = {float(exact4[side]):.1f}% przekracza podane 4+ = {reported:.1f}%"
+            )
+    return conflicts
+
+
+def _apply_goal_data_quality(
+    stats: dict[str, dict[str, float]],
+    rule: dict[str, Any],
+    result: Recommendation,
+    consistency_config: dict[str, Any] | None = None,
+) -> Recommendation:
+    settings = consistency_config or {}
+    rule_id = str(rule.get("id") or "")
+    conflicts = _goal_data_conflicts(stats, settings)
+    reasons = list(result.reasons)
+
+    goals = core._find_metric(stats, "Goals scored per game")
+    extreme_threshold = float(settings.get("extreme_goals_warning", 3.0))
+    if goals is not None and max(float(goals["home"]), float(goals["away"])) >= extreme_threshold and rule_id in OVER_QUALITY_RULE_IDS:
+        reasons.append(
+            f"Ostrzeżenie: ekstremalna średnia goli ≥ {extreme_threshold:g}; możliwy wpływ wyników odstających."
+        )
+
+    if not conflicts:
+        return replace(result, reasons=reasons)
+
+    reasons.append("Niespójność danych bramkowych: " + " | ".join(conflicts))
+    if rule_id in EXACT_TOTAL_RULE_IDS:
+        return replace(result, passed=False, data_quality=0.0, reasons=reasons)
+    if rule_id in OVER_QUALITY_RULE_IDS:
+        quality_cap = float(settings.get("over_quality_cap", 80))
+        return replace(result, data_quality=min(result.data_quality, quality_cap), reasons=reasons)
+    return replace(result, reasons=reasons)
+
+
+def evaluate_rule(
+    stats: dict[str, dict[str, float]],
+    rule: dict[str, Any],
+    consistency_config: dict[str, Any] | None = None,
+) -> Recommendation:
     if str(rule.get("id") or "") == "btts":
-        return _evaluate_btts(stats, rule)
-    return core.evaluate_rule(stats, rule)
+        result = _evaluate_btts(stats, rule)
+    else:
+        result = core.evaluate_rule(stats, rule)
+    return _apply_goal_data_quality(stats, rule, result, consistency_config)
 
 
 def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recommendation]:
-    rules = config.get("recommendations", {}).get("rules", [])
-    return [evaluate_rule(match.get("stats", {}), rule) for rule in rules if rule.get("enabled", True)]
+    recommendations = config.get("recommendations", {})
+    rules = recommendations.get("rules", [])
+    consistency_config = recommendations.get("goal_data_consistency", {})
+    return [
+        evaluate_rule(match.get("stats", {}), rule, consistency_config)
+        for rule in rules
+        if rule.get("enabled", True)
+    ]
