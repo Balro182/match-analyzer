@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from evaluation import (
+    classify_outcome,
+    quality_bucket,
+    recommendation_status,
+    score_bucket,
+)
+
 
 def validate_scoreline(home: int, away: int, home_ht: int | None = None, away_ht: int | None = None) -> tuple[bool, str]:
     values = [home, away]
@@ -101,7 +108,6 @@ def _actual_by_rule(
     if rule_id in half_time:
         return half_time[rule_id]
 
-    # HT/FT jest rozliczane jednoznacznie z perspektywy gospodarzy: A/A, A/X ... B/B.
     htft_map = {
         "win_win": ("A", "A"),
         "win_draw": ("A", "X"),
@@ -135,21 +141,29 @@ def settle_recommendations(
         predicted = bool(recommendation.get("passed"))
         rule_id = str(recommendation.get("rule_id") or "")
         actual = _actual_by_rule(rule_id, home, away, home_ht, away_ht)
+        status = str(recommendation.get("status") or recommendation_status(recommendation))
+        outcome_class = classify_outcome(predicted, actual)
+
         if actual is None:
             result = "brak danych"
         elif not predicted:
             result = "brak typu"
         else:
             result = "trafiona" if actual else "nietrafiona"
+
         rows.append(
             {
                 "rule_id": rule_id,
                 "label": recommendation.get("label"),
                 "score": recommendation.get("score"),
+                "score_bucket": recommendation.get("score_bucket") or score_bucket(recommendation.get("score")),
                 "data_quality": recommendation.get("data_quality"),
+                "quality_bucket": recommendation.get("quality_bucket") or quality_bucket(recommendation.get("data_quality")),
+                "status": status,
                 "predicted": predicted,
                 "actual": actual,
                 "result": result,
+                "outcome_class": outcome_class,
             }
         )
     return rows
