@@ -22,7 +22,7 @@ recommendations:
     - {id: home_win_ht, label: "Wygra A w 1. połowie", enabled: true, mode: special, conditions: [{metric: "Team win first half", operator: ">=", threshold_home: 55, threshold_away: 55}]}
     - {id: draw_ht, label: "Remis w 1. połowie", enabled: true, mode: special, conditions: [{metric: "Team draw at half time", operator: ">=", threshold_home: 35, threshold_away: 35}]}
     - {id: away_win_ht, label: "Wygra B w 1. połowie", enabled: true, mode: special, conditions: [{metric: "Team win first half", operator: ">=", threshold_home: 45, threshold_away: 45}]}
-    - {id: btts, label: "Obie drużyny strzelą", enabled: true, mode: both, conditions: [{metric: "Both Teams to Score", operator: ">=", threshold_home: 55, threshold_away: 55}]}
+    - {id: btts, label: "Obie drużyny strzelą", enabled: true, mode: special, conditions: [{metric: "Both Teams to Score", operator: ">=", threshold_home: 55, threshold_away: 55, minimum_btts: 45, minimum_team_scored: 70, maximum_under25: 65}]}
     - {id: btts_ht1, label: "Obie drużyny strzelą w 1. połowie", enabled: true, mode: both, conditions: [{metric: "BTTS in first-half", operator: ">=", threshold_home: 25, threshold_away: 25}]}
     - {id: btts_ht2, label: "Obie drużyny strzelą w 2. połowie", enabled: true, mode: both, conditions: [{metric: "BBTS in second-half", operator: ">=", threshold_home: 35, threshold_away: 35}]}
     - {id: btts_over15, label: "Obie drużyny strzelą i powyżej 1,5 gola", enabled: true, mode: both, conditions: [{metric: "BBTS and Over 1.5", operator: ">=", threshold_home: 55, threshold_away: 55}]}
