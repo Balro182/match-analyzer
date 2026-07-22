@@ -5,12 +5,13 @@ from typing import Any
 
 import engine_core as core
 
-ALGORITHM_VERSION = "2.5.0"
+ALGORITHM_VERSION = "2.6.0"
 METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
 
 EXACT_TOTAL_RULE_IDS = {"total0", "total1", "total2", "total3", "total4", "total01", "total23", "total4plus"}
+TOTAL_QUALITY_RULE_IDS = {"over25", "over35", "under25", "under35"}
 OVER_QUALITY_RULE_IDS = {"over25", "over35"}
 
 
@@ -121,6 +122,47 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     )
 
 
+def _evaluate_clean_sheets(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
+    condition = (rule.get("conditions") or [{}])[0]
+    clean_sheets = core._find_metric(stats, "Clean sheets")
+    team_scored = core._find_metric(stats, "Team scored")
+    missing = [
+        name for name, value in (("Clean sheets", clean_sheets), ("Team scored", team_scored))
+        if value is None
+    ]
+    if missing:
+        return Recommendation(
+            rule["id"], rule["label"], 0.0, False,
+            ["Brak danych do zabezpieczonej formuły czystego konta: " + ", ".join(missing)],
+            100.0 * (2 - len(missing)) / 2, mode="special",
+        )
+
+    assert clean_sheets is not None and team_scored is not None
+    threshold_home, threshold_away = core._thresholds(condition)
+    threshold = float(condition.get("minimum_clean_sheet_base", (threshold_home + threshold_away) / 2))
+
+    home_clean = float(clean_sheets["home"])
+    away_clean = float(clean_sheets["away"])
+    home_opponent_blank = 100.0 - float(team_scored["away"])
+    away_opponent_blank = 100.0 - float(team_scored["home"])
+    home_base = (home_clean + home_opponent_blank) / 2
+    away_base = (away_clean + away_opponent_blank) / 2
+    raw_value = max(home_base, away_base)
+    passed = raw_value >= threshold
+    score = round(core._strength(raw_value, threshold, ">="), 1)
+    preferred = "A" if home_base >= away_base else "B"
+
+    reasons = [
+        f"Baza czystego konta A: ({home_clean:.1f} + (100 - {float(team_scored['away']):.1f})) / 2 = {home_base:.1f}",
+        f"Baza czystego konta B: ({away_clean:.1f} + (100 - {float(team_scored['home']):.1f})) / 2 = {away_base:.1f}",
+        f"Najmocniejsza strona: {preferred}, wartość {raw_value:.1f}, próg {threshold:g}",
+    ]
+    return Recommendation(
+        rule["id"], rule["label"], score, passed, reasons,
+        100.0, raw_value, threshold, "special",
+    )
+
+
 def _goal_data_conflicts(
     stats: dict[str, dict[str, float]],
     consistency_config: dict[str, Any] | None = None,
@@ -173,8 +215,8 @@ def _apply_goal_data_quality(
     reasons.append("Niespójność danych bramkowych: " + " | ".join(conflicts))
     if rule_id in EXACT_TOTAL_RULE_IDS:
         return replace(result, passed=False, data_quality=0.0, reasons=reasons)
-    if rule_id in OVER_QUALITY_RULE_IDS:
-        quality_cap = float(settings.get("over_quality_cap", 80))
+    if rule_id in TOTAL_QUALITY_RULE_IDS:
+        quality_cap = float(settings.get("total_quality_cap", settings.get("over_quality_cap", 80)))
         return replace(result, data_quality=min(result.data_quality, quality_cap), reasons=reasons)
     return replace(result, reasons=reasons)
 
@@ -184,8 +226,11 @@ def evaluate_rule(
     rule: dict[str, Any],
     consistency_config: dict[str, Any] | None = None,
 ) -> Recommendation:
-    if str(rule.get("id") or "") == "btts":
+    rule_id = str(rule.get("id") or "")
+    if rule_id == "btts":
         result = _evaluate_btts(stats, rule)
+    elif rule_id == "clean_sheets":
+        result = _evaluate_clean_sheets(stats, rule)
     else:
         result = core.evaluate_rule(stats, rule)
     return _apply_goal_data_quality(stats, rule, result, consistency_config)
