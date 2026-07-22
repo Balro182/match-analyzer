@@ -21,7 +21,10 @@ def prepare_recommendation(
         and float(enriched.get("data_quality") or 0.0) >= minimum_quality
         and (passed or not require_passed)
     )
-    recommended = eligible and str(enriched.get("status")) in RECOMMENDED_STATUSES
+    allowed_statuses = set(RECOMMENDED_STATUSES)
+    if not require_passed:
+        allowed_statuses.add("OBSERVATIONAL")
+    recommended = eligible and str(enriched.get("status")) in allowed_statuses
     enriched["eligible"] = eligible
     enriched["recommended"] = recommended
     enriched["decision_policy"] = {
