@@ -7,10 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from decisions import prepare_recommendations
 from engine import ALGORITHM_VERSION, analyze_match
 
 DB_PATH = Path(__file__).with_name("predictions.db")
+CONFIG_PATH = Path(__file__).with_name("config.yaml")
 DEFAULT_PROFILE_NAME = "Domyślny"
 
 
@@ -29,6 +32,15 @@ def _columns(con: sqlite3.Connection) -> set[str]:
 def _config_hash(config: dict[str, Any]) -> str:
     payload = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _current_config() -> dict[str, Any]:
+    saved = load_prediction_config()
+    if saved and isinstance(saved.get("recommendations"), dict):
+        return saved
+    with open(CONFIG_PATH, encoding="utf-8") as handle:
+        value = yaml.safe_load(handle)
+    return value if isinstance(value, dict) else {}
 
 
 def init_db() -> None:
@@ -157,6 +169,15 @@ def reset_prediction_config() -> tuple[bool, str]:
 def save_match(snapshot: dict[str, Any]) -> tuple[bool, str]:
     init_db()
     match = snapshot["match"]
+    minimum_score = float(snapshot.get("minimum_score", 100))
+    minimum_quality = float(snapshot.get("minimum_data_quality", 100))
+    require_passed = bool(snapshot.get("require_passed", True))
+    snapshot["recommendations"] = prepare_recommendations(
+        snapshot.get("recommendations", []),
+        minimum_score=minimum_score,
+        minimum_quality=minimum_quality,
+        require_passed=require_passed,
+    )
     unique_key = "|".join(
         [
             str(match.get("match_date") or match.get("listing_date") or ""),
@@ -249,11 +270,12 @@ def settle_match(
         )
 
 
-def reprocess_match(match_id: int, config: dict[str, Any]) -> tuple[bool, str]:
+def reprocess_match(match_id: int, config: dict[str, Any] | None = None) -> tuple[bool, str]:
     """Tworzy nowy, niezmienny run aktualnego algorytmu bez nadpisywania historii."""
     from settlement import settle_recommendations
 
     init_db()
+    active_config = config or _current_config()
     with _connect() as con:
         row = con.execute("SELECT * FROM saved_matches WHERE id=?", (match_id,)).fetchone()
         if row is None:
@@ -266,12 +288,12 @@ def reprocess_match(match_id: int, config: dict[str, Any]) -> tuple[bool, str]:
         if not isinstance(match, dict) or not match.get("stats"):
             return False, "Historyczny snapshot nie zawiera danych potrzebnych do ponownej analizy."
 
-        recommendations_config = config.get("recommendations", {})
+        recommendations_config = active_config.get("recommendations", {})
         minimum_score = float(recommendations_config.get("min_score", 100))
         minimum_quality = float(recommendations_config.get("min_data_quality", 100))
         require_passed = True
 
-        raw = [item.to_dict() for item in analyze_match(match, config)]
+        raw = [item.to_dict() for item in analyze_match(match, active_config)]
         recommendations = prepare_recommendations(
             raw,
             minimum_score=minimum_score,
@@ -300,7 +322,7 @@ def reprocess_match(match_id: int, config: dict[str, Any]) -> tuple[bool, str]:
                 match_id,
                 datetime.now(timezone.utc).isoformat(),
                 ALGORITHM_VERSION,
-                _config_hash(config),
+                _config_hash(active_config),
                 minimum_score,
                 minimum_quality,
                 int(require_passed),
