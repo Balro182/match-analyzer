@@ -5,7 +5,7 @@ from typing import Any
 
 import engine_core as core
 
-ALGORITHM_VERSION = "2.7.0"
+ALGORITHM_VERSION = "2.7.1"
 METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
@@ -65,7 +65,9 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     minimum_strong_goals = max(1.4, float(condition.get("minimum_strong_side_goals", 1.4)))
     maximum_under25 = min(65.0, float(condition.get("maximum_under25", 65)))
     minimum_scoring_base = max(60.0, float(condition.get("minimum_scoring_base", 60)))
-    strong_clean_base = min(55.0, float(condition.get("strong_clean_sheet_base", 55)))
+    # Dopiero baza 60+ jest twardym konfliktem. Starsza konfiguracja 55
+    # nie może ponownie włączyć zbyt agresywnej blokady BTTS.
+    strong_clean_base = max(60.0, float(condition.get("strong_clean_sheet_base", 60)))
 
     scoring_home = (tsh + bh + (100 - csa) + _conceding_support(ca)) / 4
     scoring_away = (tsa + ba + (100 - csh) + _conceding_support(ch)) / 4
@@ -103,7 +105,7 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
         "średni Under 2,5": under_mean < maximum_under25,
         "scoring base A": scoring_home >= minimum_scoring_base,
         "scoring base B": scoring_away >= minimum_scoring_base,
-        "brak silnego konfliktu clean sheet": no_clean_conflict,
+        "brak twardego konfliktu clean sheet": no_clean_conflict,
         "brak bloku defensywnego": no_defensive_block,
         "brak bloku dominacji jednostronnej": no_dominance_block,
     }
@@ -120,7 +122,7 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
         f"Team scored: A {tsh:.1f}, B {tsa:.1f}; minimum {minimum_team_scored:g}",
         f"Gole na mecz: A {gh:.2f}, B {ga:.2f}; minimum obu {minimum_side_goals:g}, jednej {minimum_strong_goals:g}",
         f"Scoring base A: {scoring_home:.1f}, B: {scoring_away:.1f}; minimum {minimum_scoring_base:g}",
-        f"Baza clean sheet A: {clean_base_home:.1f}, B: {clean_base_away:.1f}; blok od {strong_clean_base:g}",
+        f"Baza clean sheet A: {clean_base_home:.1f}, B: {clean_base_away:.1f}; twardy blok od {strong_clean_base:g}",
         f"Blok defensywny: A={'TAK' if defensive_home else 'NIE'}, B={'TAK' if defensive_away else 'NIE'}",
         f"Blok dominacji jednostronnej: {'TAK' if dominance and not escape else 'NIE'}",
         f"Średni Under 2,5: {under_mean:.1f}, wymagane poniżej {maximum_under25:g}",
@@ -142,7 +144,26 @@ def _evaluate_clean_sheets(stats: dict[str, dict[str, float]], rule: dict[str, A
     home = (float(clean["home"]) + 100 - float(scored["away"])) / 2
     away = (float(clean["away"]) + 100 - float(scored["home"])) / 2
     raw = max(home, away)
-    return Recommendation(rule["id"], rule["label"], round(core._strength(raw, threshold, ">="), 1), raw >= threshold, [f"Baza czystego konta A: {home:.1f}", f"Baza czystego konta B: {away:.1f}", f"Najlepsza baza {raw:.1f}, próg {threshold:g}"], 100.0, raw, threshold, "special")
+    passed = raw >= threshold
+    score = round(core._strength(raw, threshold, ">="), 1)
+
+    # Baza 45–54,9 jest tylko sygnałem granicznym. Ograniczenie wyniku do
+    # 104,9 sprawia, że warstwa statusów klasyfikuje ją jako BORDERLINE.
+    if passed and raw < 55.0:
+        score = min(score, 104.9)
+        tier = "BORDERLINE"
+    elif raw < 60.0:
+        tier = "FORMAL"
+    else:
+        tier = "STRONG"
+
+    reasons = [
+        f"Baza czystego konta A: {home:.1f}",
+        f"Baza czystego konta B: {away:.1f}",
+        f"Najlepsza baza {raw:.1f}, próg {threshold:g}",
+        f"Poziom sygnału clean sheet: {tier} (45–54,9 graniczny; 55–59,9 formalny; 60+ mocny)",
+    ]
+    return Recommendation(rule["id"], rule["label"], score, passed, reasons, 100.0, raw, threshold, "special")
 
 
 def _goal_data_conflicts(stats: dict[str, dict[str, float]], settings: dict[str, Any] | None = None) -> list[str]:
