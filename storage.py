@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from engine import ALGORITHM_VERSION
+from decisions import prepare_recommendations
+from engine import ALGORITHM_VERSION, analyze_match
 
 DB_PATH = Path(__file__).with_name("predictions.db")
 DEFAULT_PROFILE_NAME = "Domyślny"
@@ -22,6 +24,11 @@ def _connect() -> sqlite3.Connection:
 
 def _columns(con: sqlite3.Connection) -> set[str]:
     return {str(row[1]) for row in con.execute("PRAGMA table_info(saved_matches)").fetchall()}
+
+
+def _config_hash(config: dict[str, Any]) -> str:
+    payload = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def init_db() -> None:
@@ -59,6 +66,23 @@ def init_db() -> None:
                 config_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evaluation_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                evaluated_at TEXT NOT NULL,
+                algorithm_version TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                minimum_score REAL NOT NULL,
+                minimum_data_quality REAL NOT NULL,
+                require_passed INTEGER NOT NULL,
+                recommendations_json TEXT NOT NULL,
+                settlement_json TEXT NOT NULL,
+                FOREIGN KEY(match_id) REFERENCES saved_matches(id) ON DELETE CASCADE
             )
             """
         )
@@ -185,6 +209,18 @@ def list_matches(status: str | None = None) -> list[dict[str, Any]]:
         return [dict(row) for row in con.execute(query, params).fetchall()]
 
 
+def list_evaluation_runs(match_id: int) -> list[dict[str, Any]]:
+    init_db()
+    with _connect() as con:
+        return [
+            dict(row)
+            for row in con.execute(
+                "SELECT * FROM evaluation_runs WHERE match_id=? ORDER BY evaluated_at DESC, id DESC",
+                (match_id,),
+            ).fetchall()
+        ]
+
+
 def settle_match(
     match_id: int,
     home_ft: int,
@@ -213,29 +249,66 @@ def settle_match(
         )
 
 
-def reprocess_match(match_id: int) -> tuple[bool, str]:
-    """Jawne, audytowalne ponowne rozliczenie pojedynczego meczu."""
+def reprocess_match(match_id: int, config: dict[str, Any]) -> tuple[bool, str]:
+    """Tworzy nowy, niezmienny run aktualnego algorytmu bez nadpisywania historii."""
     from settlement import settle_recommendations
 
+    init_db()
     with _connect() as con:
         row = con.execute("SELECT * FROM saved_matches WHERE id=?", (match_id,)).fetchone()
         if row is None:
             return False, "Nie znaleziono meczu."
         if row["home_ft"] is None or row["away_ft"] is None:
             return False, "Mecz nie ma zapisanego wyniku końcowego."
+
         snapshot = json.loads(row["snapshot_json"])
+        match = snapshot.get("match")
+        if not isinstance(match, dict) or not match.get("stats"):
+            return False, "Historyczny snapshot nie zawiera danych potrzebnych do ponownej analizy."
+
+        recommendations_config = config.get("recommendations", {})
+        minimum_score = float(recommendations_config.get("min_score", 100))
+        minimum_quality = float(recommendations_config.get("min_data_quality", 100))
+        require_passed = True
+
+        raw = [item.to_dict() for item in analyze_match(match, config)]
+        recommendations = prepare_recommendations(
+            raw,
+            minimum_score=minimum_score,
+            minimum_quality=minimum_quality,
+            require_passed=require_passed,
+        )
         settlement = settle_recommendations(
-            snapshot.get("recommendations", []),
+            recommendations,
             int(row["home_ft"]),
             int(row["away_ft"]),
             None if row["home_ht"] is None else int(row["home_ht"]),
             None if row["away_ht"] is None else int(row["away_ht"]),
+            minimum_score=minimum_score,
+            minimum_quality=minimum_quality,
+            require_passed=require_passed,
         )
         con.execute(
-            "UPDATE saved_matches SET settlement_json=?, algorithm_version=? WHERE id=?",
-            (json.dumps(settlement, ensure_ascii=False), ALGORITHM_VERSION, match_id),
+            """
+            INSERT INTO evaluation_runs (
+                match_id, evaluated_at, algorithm_version, config_hash,
+                minimum_score, minimum_data_quality, require_passed,
+                recommendations_json, settlement_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                match_id,
+                datetime.now(timezone.utc).isoformat(),
+                ALGORITHM_VERSION,
+                _config_hash(config),
+                minimum_score,
+                minimum_quality,
+                int(require_passed),
+                json.dumps(recommendations, ensure_ascii=False),
+                json.dumps(settlement, ensure_ascii=False),
+            ),
         )
-    return True, "Mecz został ponownie rozliczony aktualnym algorytmem."
+    return True, f"Utworzono nowy run algorytmu {ALGORITHM_VERSION}. Oryginalna historia nie została zmieniona."
 
 
 def delete_match(match_id: int) -> None:
