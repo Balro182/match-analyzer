@@ -4,8 +4,9 @@ from dataclasses import replace
 from typing import Any
 
 import engine_core as core
+from selection import apply_final_selection
 
-ALGORITHM_VERSION = "2.7.1"
+ALGORITHM_VERSION = "2.8.0"
 METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
@@ -57,16 +58,12 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     th, ta = core._thresholds(condition)
     mean_threshold = (th + ta) / 2
 
-    # Wartości minimalne są wymuszone w kodzie, aby starszy profil SQLite
-    # nie mógł przywrócić mniej bezpiecznej reguły BTTS.
     minimum_btts = max(50.0, float(condition.get("minimum_btts", 50)))
     minimum_team_scored = max(70.0, float(condition.get("minimum_team_scored", 70)))
     minimum_side_goals = max(1.0, float(condition.get("minimum_side_goals", 1.0)))
     minimum_strong_goals = max(1.4, float(condition.get("minimum_strong_side_goals", 1.4)))
     maximum_under25 = min(65.0, float(condition.get("maximum_under25", 65)))
     minimum_scoring_base = max(60.0, float(condition.get("minimum_scoring_base", 60)))
-    # Dopiero baza 60+ jest twardym konfliktem. Starsza konfiguracja 55
-    # nie może ponownie włączyć zbyt agresywnej blokady BTTS.
     strong_clean_base = max(60.0, float(condition.get("strong_clean_sheet_base", 60)))
 
     scoring_home = (tsh + bh + (100 - csa) + _conceding_support(ca)) / 4
@@ -147,8 +144,6 @@ def _evaluate_clean_sheets(stats: dict[str, dict[str, float]], rule: dict[str, A
     passed = raw >= threshold
     score = round(core._strength(raw, threshold, ">="), 1)
 
-    # Baza 45–54,9 jest tylko sygnałem granicznym. Ograniczenie wyniku do
-    # 104,9 sprawia, że warstwa statusów klasyfikuje ją jako BORDERLINE.
     if passed and raw < 55.0:
         score = min(score, 104.9)
         tier = "BORDERLINE"
@@ -213,4 +208,5 @@ def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any], cons
 def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recommendation]:
     recommendations = config.get("recommendations", {})
     settings = recommendations.get("goal_data_consistency", {})
-    return [evaluate_rule(match.get("stats", {}), rule, settings) for rule in recommendations.get("rules", []) if rule.get("enabled", True)]
+    raw = [evaluate_rule(match.get("stats", {}), rule, settings) for rule in recommendations.get("rules", []) if rule.get("enabled", True)]
+    return apply_final_selection(raw, config)
