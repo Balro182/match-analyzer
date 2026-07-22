@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from decisions import is_recommended
 from evaluation import (
     classify_outcome,
     quality_bucket,
@@ -131,6 +132,9 @@ def settle_recommendations(
     away: int,
     home_ht: int | None = None,
     away_ht: int | None = None,
+    minimum_score: float = 100.0,
+    minimum_quality: float = 100.0,
+    require_passed: bool = True,
 ) -> list[dict[str, Any]]:
     valid, message = validate_scoreline(home, away, home_ht, away_ht)
     if not valid:
@@ -138,7 +142,12 @@ def settle_recommendations(
 
     rows: list[dict[str, Any]] = []
     for recommendation in recommendations:
-        predicted = bool(recommendation.get("passed"))
+        predicted = is_recommended(
+            recommendation,
+            minimum_score=minimum_score,
+            minimum_quality=minimum_quality,
+            require_passed=require_passed,
+        )
         rule_id = str(recommendation.get("rule_id") or "")
         actual = _actual_by_rule(rule_id, home, away, home_ht, away_ht)
         status = str(recommendation.get("status") or recommendation_status(recommendation))
@@ -160,6 +169,7 @@ def settle_recommendations(
                 "data_quality": recommendation.get("data_quality"),
                 "quality_bucket": recommendation.get("quality_bucket") or quality_bucket(recommendation.get("data_quality")),
                 "status": status,
+                "eligible": recommendation.get("eligible"),
                 "predicted": predicted,
                 "actual": actual,
                 "result": result,
