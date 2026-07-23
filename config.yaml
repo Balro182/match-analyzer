@@ -6,6 +6,10 @@ source:
 recommendations:
   min_score: 100
   min_data_quality: 100
+  selection:
+    enabled: true
+    max_recommendations: 5
+    max_per_category: 1
   goal_data_consistency:
     maximum_4plus_gap: 20
     over_quality_cap: 80
