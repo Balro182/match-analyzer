@@ -6,7 +6,7 @@ def rec(rule_id: str, score: float, passed: bool = True, quality: float = 100.0)
     return Recommendation(rule_id, rule_id, score, passed, [], quality, score, 100.0, "special")
 
 
-def config(max_recommendations: int = 3) -> dict:
+def config(max_recommendations: int = 5) -> dict:
     return {
         "recommendations": {
             "min_score": 100,
@@ -71,7 +71,23 @@ def test_correlated_goal_markets_are_reduced_to_one() -> None:
     assert result["under35"].passed is False
 
 
-def test_final_shortlist_is_limited() -> None:
+def test_final_shortlist_defaults_to_five() -> None:
+    result = apply_final_selection(
+        [
+            rec("home_win", 115),
+            rec("over15", 120),
+            rec("over05ht", 110),
+            rec("goal_both_halves", 105),
+            rec("total3", 104),
+            rec("win_win", 103),
+        ],
+        config(),
+    )
+
+    assert sum(item.passed for item in result) == 5
+
+
+def test_final_shortlist_limit_remains_configurable() -> None:
     result = apply_final_selection(
         [
             rec("home_win", 115),
