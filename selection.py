@@ -96,7 +96,7 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
 
     minimum_score = float(rec_cfg.get("min_score", 100))
     minimum_quality = float(rec_cfg.get("min_data_quality", 100))
-    max_recommendations = max(1, int(selection.get("max_recommendations", 3)))
+    max_recommendations = max(1, int(selection.get("max_recommendations", 5)))
     max_per_category = max(1, int(selection.get("max_per_category", 1)))
 
     current = list(recommendations)
