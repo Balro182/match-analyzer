@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +24,14 @@ st.set_page_config(
 def load_config() -> dict:
     with open(ROOT / "config.yaml", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict:
+    result = copy.deepcopy(base)
+    recommendations = result.setdefault("recommendations", {})
+    recommendations["min_score"] = int(minimum_score)
+    recommendations["min_data_quality"] = int(minimum_quality)
+    return result
 
 
 def is_raw_candidate(rec: dict, minimum_score: float, minimum_quality: float) -> bool:
@@ -56,24 +65,48 @@ def result_rows(recommendations: list[dict], minimum_score: float, minimum_quali
     return rows
 
 
-config = load_config()
-recommendation_config = config.get("recommendations", {})
-minimum_score = float(recommendation_config.get("min_score", 100))
-minimum_quality = float(recommendation_config.get("min_data_quality", 100))
+base_config = load_config()
+base_recommendations = base_config.get("recommendations", {})
+default_score = int(base_recommendations.get("min_score", 100))
+default_quality = int(base_recommendations.get("min_data_quality", 100))
 max_recommendations = int(
-    recommendation_config.get("selection", {}).get("max_recommendations", 5)
+    base_recommendations.get("selection", {}).get("max_recommendations", 5)
 )
 
 st.title("📋 Ręczny analizator statystyk meczu")
-st.caption(
-    f"Algorytm {ALGORITHM_VERSION} · score ≥ {minimum_score:g} · "
-    f"jakość ≥ {minimum_quality:g}% · maksymalnie TOP {max_recommendations}"
-)
-
 st.info(
     "Wklej cały blok statystyk w takim samym układzie jak z football-stats: "
     "wartość gospodarza, nazwa metryki, wartość gościa. Program używa tego samego "
     "engine.py i config.yaml co główna aplikacja."
+)
+
+st.subheader("Filtry końcowej selekcji")
+score_col, quality_col = st.columns(2)
+minimum_score = score_col.slider(
+    "Minimalny score",
+    min_value=50,
+    max_value=150,
+    value=default_score,
+    step=1,
+    help="Score 100 oznacza osiągnięcie progu rynku. Wyższa wartość zaostrza końcową selekcję.",
+)
+minimum_quality = quality_col.slider(
+    "Minimalna jakość danych %",
+    min_value=0,
+    max_value=100,
+    value=default_quality,
+    step=1,
+    help="Rynek przejdzie tylko wtedy, gdy jego jakość danych osiągnie co najmniej tę wartość.",
+)
+config = runtime_config(base_config, minimum_score, minimum_quality)
+recommendation_config = config.get("recommendations", {})
+
+st.caption(
+    f"Algorytm {ALGORITHM_VERSION} · score ≥ {minimum_score:g} · "
+    f"jakość ≥ {minimum_quality:g}% · maksymalnie TOP {max_recommendations}"
+)
+st.caption(
+    "Ustawienia suwaków obowiązują wyłącznie w bieżącej analizie i nie zmieniają pliku config.yaml."
 )
 
 name_col_a, name_col_b = st.columns(2)
@@ -144,6 +177,9 @@ if analyze:
 
     st.divider()
     st.subheader(f"{match['home_team']} – {match['away_team']}")
+    st.caption(
+        f"Filtry tej analizy: score ≥ {minimum_score}, jakość ≥ {minimum_quality}%"
+    )
 
     if selected_rows:
         st.success(f"Końcowa selekcja: {len(selected_rows)} rynków")
