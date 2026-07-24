@@ -34,21 +34,48 @@ def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict
     return result
 
 
-def is_raw_candidate(rec: dict, minimum_score: float, minimum_quality: float) -> bool:
-    selection_rejected = any(str(reason).startswith(SELECTION_PREFIX) for reason in rec.get("reasons", []))
+def meets_runtime_filters(rec: dict, minimum_score: float, minimum_quality: float) -> bool:
     return (
         float(rec.get("score", 0)) >= minimum_score
         and float(rec.get("data_quality", 0)) >= minimum_quality
+    )
+
+
+def is_raw_candidate(rec: dict, minimum_score: float, minimum_quality: float) -> bool:
+    selection_rejected = any(
+        str(reason).startswith(SELECTION_PREFIX)
+        for reason in rec.get("reasons", [])
+    )
+    return (
+        meets_runtime_filters(rec, minimum_score, minimum_quality)
         and (bool(rec.get("passed")) or selection_rejected)
     )
 
 
-def result_rows(recommendations: list[dict], minimum_score: float, minimum_quality: float) -> list[dict]:
+def result_rows(
+    recommendations: list[dict],
+    minimum_score: float,
+    minimum_quality: float,
+) -> list[dict]:
     rows = []
     for rec in recommendations:
         reasons = [str(reason) for reason in rec.get("reasons", [])]
-        selected = bool(rec.get("passed"))
+        filter_passed = meets_runtime_filters(rec, minimum_score, minimum_quality)
+        selected = bool(rec.get("passed")) and filter_passed
         raw_candidate = is_raw_candidate(rec, minimum_score, minimum_quality)
+
+        if not filter_passed:
+            filter_reasons = []
+            if float(rec.get("score", 0)) < minimum_score:
+                filter_reasons.append(
+                    f"score {float(rec.get('score', 0)):.1f} < {minimum_score:g}"
+                )
+            if float(rec.get("data_quality", 0)) < minimum_quality:
+                filter_reasons.append(
+                    f"jakość {float(rec.get('data_quality', 0)):.1f}% < {minimum_quality:g}%"
+                )
+            reasons.append("Filtr ręczny: ODRZUCONE — " + ", ".join(filter_reasons))
+
         rows.append(
             {
                 "Rynek": rec.get("label"),
@@ -57,6 +84,7 @@ def result_rows(recommendations: list[dict], minimum_score: float, minimum_quali
                 "Próg": rec.get("threshold"),
                 "Score": rec.get("score"),
                 "Jakość %": rec.get("data_quality"),
+                "Spełnia aktualne suwaki": "TAK" if filter_passed else "NIE",
                 "Spełnił regułę przed selekcją": "TAK" if raw_candidate else "NIE",
                 "Wybrany końcowo": "TAK" if selected else "NIE",
                 "Uzasadnienie": " | ".join(reasons),
@@ -156,7 +184,9 @@ if analyze:
         for condition in rule.get("conditions", [])
         if condition.get("metric")
     }
-    missing_enabled = sorted(metric for metric in enabled_metrics if metric not in parsed.stats)
+    missing_enabled = sorted(
+        metric for metric in enabled_metrics if metric not in parsed.stats
+    )
     if missing_enabled:
         st.error(
             "Brakuje danych wymaganych przez aktywne reguły: "
@@ -173,7 +203,9 @@ if analyze:
     recommendations = [rec.to_dict() for rec in analyze_match(match, config)]
     rows = result_rows(recommendations, minimum_score, minimum_quality)
     selected_rows = [row for row in rows if row["Wybrany końcowo"] == "TAK"]
-    raw_rows = [row for row in rows if row["Spełnił regułę przed selekcją"] == "TAK"]
+    raw_rows = [
+        row for row in rows if row["Spełnił regułę przed selekcją"] == "TAK"
+    ]
 
     st.divider()
     st.subheader(f"{match['home_team']} – {match['away_team']}")
@@ -217,12 +249,18 @@ if analyze:
         )
         st.dataframe(raw_frame, use_container_width=True, hide_index=True)
     else:
-        st.info("Brak rynków spełniających jednocześnie regułę, score i jakość danych.")
+        st.info(
+            "Brak rynków spełniających jednocześnie regułę, score i jakość danych."
+        )
 
     with st.expander("Pełne wyliczenia wszystkich aktywnych reguł"):
+        st.caption(
+            "Ta tabela celowo pokazuje również rynki odrzucone. Kolumna „Spełnia aktualne suwaki” "
+            "jednoznacznie wskazuje, czy rynek osiągnął ustawiony score i jakość."
+        )
         all_frame = pd.DataFrame(rows).sort_values(
-            by=["Wybrany końcowo", "Score"],
-            ascending=[False, False],
+            by=["Wybrany końcowo", "Spełnia aktualne suwaki", "Score"],
+            ascending=[False, False, False],
             na_position="last",
         )
         st.dataframe(all_frame, use_container_width=True, hide_index=True)
@@ -236,7 +274,9 @@ if analyze:
             }
             for metric, values in parsed.stats.items()
         ]
-        st.dataframe(pd.DataFrame(input_rows), use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(input_rows), use_container_width=True, hide_index=True
+        )
 
     if parsed.ignored_lines:
         with st.expander("Pominięte nagłówki i nierozpoznane wiersze"):
