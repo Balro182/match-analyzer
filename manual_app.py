@@ -34,6 +34,12 @@ def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict
     return result
 
 
+def clear_manual_form() -> None:
+    st.session_state["manual_home_team"] = ""
+    st.session_state["manual_away_team"] = ""
+    st.session_state["manual_pasted_stats"] = ""
+
+
 def meets_runtime_filters(rec: dict, minimum_score: float, minimum_quality: float) -> bool:
     return (
         float(rec.get("score", 0)) >= minimum_score
@@ -138,8 +144,16 @@ st.caption(
 )
 
 name_col_a, name_col_b = st.columns(2)
-home_team = name_col_a.text_input("Gospodarz", placeholder="np. Raków Częstochowa")
-away_team = name_col_b.text_input("Gość", placeholder="np. Valletta FC")
+home_team = name_col_a.text_input(
+    "Gospodarz",
+    placeholder="np. Raków Częstochowa",
+    key="manual_home_team",
+)
+away_team = name_col_b.text_input(
+    "Gość",
+    placeholder="np. Valletta FC",
+    key="manual_away_team",
+)
 
 pasted = st.text_area(
     "Dane meczu",
@@ -151,9 +165,21 @@ pasted = st.text_area(
         "1.00    Goals conceded per game    1.10\n"
         "..."
     ),
+    key="manual_pasted_stats",
 )
 
-analyze = st.button("🔎 Analizuj", type="primary", use_container_width=True)
+analyze_col, clear_col = st.columns([3, 1])
+analyze = analyze_col.button(
+    "🔎 Analizuj",
+    type="primary",
+    use_container_width=True,
+)
+clear_col.button(
+    "🧹 Wyczyść",
+    use_container_width=True,
+    on_click=clear_manual_form,
+    help="Usuwa nazwy drużyn, wklejone statystyki i wynik poprzedniej analizy.",
+)
 
 if analyze:
     if not pasted.strip():
