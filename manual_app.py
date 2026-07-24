@@ -27,6 +27,7 @@ def load_config() -> dict:
 
 
 def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict:
+    """Apply lower bounds inside the engine without changing config.yaml."""
     result = copy.deepcopy(base)
     recommendations = result.setdefault("recommendations", {})
     recommendations["min_score"] = int(minimum_score)
@@ -40,46 +41,59 @@ def clear_manual_form() -> None:
     st.session_state["manual_pasted_stats"] = ""
 
 
-def meets_runtime_filters(rec: dict, minimum_score: float, minimum_quality: float) -> bool:
-    return (
-        float(rec.get("score", 0)) >= minimum_score
-        and float(rec.get("data_quality", 0)) >= minimum_quality
-    )
+def meets_runtime_filters(
+    rec: dict,
+    score_range: tuple[int, int],
+    quality_range: tuple[int, int],
+) -> bool:
+    score = float(rec.get("score", 0))
+    quality = float(rec.get("data_quality", 0))
+    score_min, score_max = score_range
+    quality_min, quality_max = quality_range
+    return score_min <= score <= score_max and quality_min <= quality <= quality_max
 
 
-def is_raw_candidate(rec: dict, minimum_score: float, minimum_quality: float) -> bool:
+def is_raw_candidate(
+    rec: dict,
+    score_range: tuple[int, int],
+    quality_range: tuple[int, int],
+) -> bool:
     selection_rejected = any(
         str(reason).startswith(SELECTION_PREFIX)
         for reason in rec.get("reasons", [])
     )
-    return (
-        meets_runtime_filters(rec, minimum_score, minimum_quality)
-        and (bool(rec.get("passed")) or selection_rejected)
+    return meets_runtime_filters(rec, score_range, quality_range) and (
+        bool(rec.get("passed")) or selection_rejected
     )
 
 
 def result_rows(
     recommendations: list[dict],
-    minimum_score: float,
-    minimum_quality: float,
+    score_range: tuple[int, int],
+    quality_range: tuple[int, int],
 ) -> list[dict]:
     rows = []
+    score_min, score_max = score_range
+    quality_min, quality_max = quality_range
+
     for rec in recommendations:
         reasons = [str(reason) for reason in rec.get("reasons", [])]
-        filter_passed = meets_runtime_filters(rec, minimum_score, minimum_quality)
+        score = float(rec.get("score", 0))
+        quality = float(rec.get("data_quality", 0))
+        filter_passed = meets_runtime_filters(rec, score_range, quality_range)
         selected = bool(rec.get("passed")) and filter_passed
-        raw_candidate = is_raw_candidate(rec, minimum_score, minimum_quality)
+        raw_candidate = is_raw_candidate(rec, score_range, quality_range)
 
         if not filter_passed:
             filter_reasons = []
-            if float(rec.get("score", 0)) < minimum_score:
-                filter_reasons.append(
-                    f"score {float(rec.get('score', 0)):.1f} < {minimum_score:g}"
-                )
-            if float(rec.get("data_quality", 0)) < minimum_quality:
-                filter_reasons.append(
-                    f"jakość {float(rec.get('data_quality', 0)):.1f}% < {minimum_quality:g}%"
-                )
+            if score < score_min:
+                filter_reasons.append(f"score {score:.1f} < {score_min:g}")
+            elif score > score_max:
+                filter_reasons.append(f"score {score:.1f} > {score_max:g}")
+            if quality < quality_min:
+                filter_reasons.append(f"jakość {quality:.1f}% < {quality_min:g}%")
+            elif quality > quality_max:
+                filter_reasons.append(f"jakość {quality:.1f}% > {quality_max:g}%")
             reasons.append("Filtr ręczny: ODRZUCONE — " + ", ".join(filter_reasons))
 
         rows.append(
@@ -90,7 +104,7 @@ def result_rows(
                 "Próg": rec.get("threshold"),
                 "Score": rec.get("score"),
                 "Jakość %": rec.get("data_quality"),
-                "Spełnia aktualne suwaki": "TAK" if filter_passed else "NIE",
+                "Spełnia aktualne zakresy": "TAK" if filter_passed else "NIE",
                 "Spełnił regułę przed selekcją": "TAK" if raw_candidate else "NIE",
                 "Wybrany końcowo": "TAK" if selected else "NIE",
                 "Uzasadnienie": " | ".join(reasons),
@@ -114,33 +128,36 @@ st.info(
     "engine.py i config.yaml co główna aplikacja."
 )
 
-st.subheader("Filtry końcowej selekcji")
+st.subheader("Zakresy końcowej selekcji")
 score_col, quality_col = st.columns(2)
-minimum_score = score_col.slider(
-    "Minimalny score",
-    min_value=50,
+score_range = score_col.slider(
+    "Zakres score",
+    min_value=0,
     max_value=150,
-    value=default_score,
+    value=(default_score, 150),
     step=1,
-    help="Score 100 oznacza osiągnięcie progu rynku. Wyższa wartość zaostrza końcową selekcję.",
+    help="Przesuń oba uchwyty, np. ustaw 120–134. Przejdą tylko rynki ze score wewnątrz zakresu.",
 )
-minimum_quality = quality_col.slider(
-    "Minimalna jakość danych %",
+quality_range = quality_col.slider(
+    "Zakres jakości danych %",
     min_value=0,
     max_value=100,
-    value=default_quality,
+    value=(default_quality, 100),
     step=1,
-    help="Rynek przejdzie tylko wtedy, gdy jego jakość danych osiągnie co najmniej tę wartość.",
+    help="Przejdą tylko rynki z jakością danych wewnątrz wybranego zakresu.",
 )
-config = runtime_config(base_config, minimum_score, minimum_quality)
+
+score_min, score_max = score_range
+quality_min, quality_max = quality_range
+config = runtime_config(base_config, score_min, quality_min)
 recommendation_config = config.get("recommendations", {})
 
 st.caption(
-    f"Algorytm {ALGORITHM_VERSION} · score ≥ {minimum_score:g} · "
-    f"jakość ≥ {minimum_quality:g}% · maksymalnie TOP {max_recommendations}"
+    f"Algorytm {ALGORITHM_VERSION} · score {score_min}–{score_max} · "
+    f"jakość {quality_min}–{quality_max}% · maksymalnie TOP {max_recommendations}"
 )
 st.caption(
-    "Ustawienia suwaków obowiązują wyłącznie w bieżącej analizie i nie zmieniają pliku config.yaml."
+    "Ustawienia zakresów obowiązują wyłącznie w bieżącej analizie i nie zmieniają pliku config.yaml."
 )
 
 name_col_a, name_col_b = st.columns(2)
@@ -227,7 +244,7 @@ if analyze:
         "errors": [],
     }
     recommendations = [rec.to_dict() for rec in analyze_match(match, config)]
-    rows = result_rows(recommendations, minimum_score, minimum_quality)
+    rows = result_rows(recommendations, score_range, quality_range)
     selected_rows = [row for row in rows if row["Wybrany końcowo"] == "TAK"]
     raw_rows = [
         row for row in rows if row["Spełnił regułę przed selekcją"] == "TAK"
@@ -236,7 +253,8 @@ if analyze:
     st.divider()
     st.subheader(f"{match['home_team']} – {match['away_team']}")
     st.caption(
-        f"Filtry tej analizy: score ≥ {minimum_score}, jakość ≥ {minimum_quality}%"
+        f"Filtry tej analizy: score {score_min}–{score_max}, "
+        f"jakość {quality_min}–{quality_max}%"
     )
 
     if selected_rows:
@@ -264,9 +282,9 @@ if analyze:
             hide_index=True,
         )
     else:
-        st.warning("Żaden rynek nie przetrwał pełnej selekcji końcowej.")
+        st.warning("Żaden rynek nie przetrwał pełnej selekcji i ustawionych zakresów.")
 
-    st.subheader("Wszystkie rynki spełniające progi przed selekcją kategorii/TOP")
+    st.subheader("Wszystkie rynki spełniające zakresy przed selekcją kategorii/TOP")
     if raw_rows:
         raw_frame = pd.DataFrame(raw_rows).sort_values(
             by=["Score", "Jakość %", "Wartość"],
@@ -276,16 +294,16 @@ if analyze:
         st.dataframe(raw_frame, use_container_width=True, hide_index=True)
     else:
         st.info(
-            "Brak rynków spełniających jednocześnie regułę, score i jakość danych."
+            "Brak rynków spełniających jednocześnie regułę oraz wybrane zakresy score i jakości."
         )
 
     with st.expander("Pełne wyliczenia wszystkich aktywnych reguł"):
         st.caption(
-            "Ta tabela celowo pokazuje również rynki odrzucone. Kolumna „Spełnia aktualne suwaki” "
-            "jednoznacznie wskazuje, czy rynek osiągnął ustawiony score i jakość."
+            "Ta tabela celowo pokazuje również rynki odrzucone. Kolumna „Spełnia aktualne zakresy” "
+            "wskazuje, czy rynek mieści się w obu wybranych przedziałach."
         )
         all_frame = pd.DataFrame(rows).sort_values(
-            by=["Wybrany końcowo", "Spełnia aktualne suwaki", "Score"],
+            by=["Wybrany końcowo", "Spełnia aktualne zakresy", "Score"],
             ascending=[False, False, False],
             na_position="last",
         )
