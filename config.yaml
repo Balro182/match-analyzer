@@ -16,6 +16,8 @@ recommendations:
     independence_penalty_per_shared_tag: 0.12
     main_min_adjusted_score: 90
     additional_min_adjusted_score: 82
+    four_plus_min_raw_value: 50
+    four_plus_main_allowed: false
   goal_data_consistency:
     maximum_4plus_gap: 20
     over_quality_cap: 80
