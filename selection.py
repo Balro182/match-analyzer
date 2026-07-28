@@ -93,24 +93,20 @@ def _category(rule_id: str) -> str:
 
 
 def _scenario_tags(rule_id: str) -> set[str]:
-    if rule_id == "home_win":
-        return {"ft_home", "home_control"}
-    if rule_id == "draw":
-        return {"ft_draw", "draw_scenario"}
-    if rule_id == "away_win":
-        return {"ft_away", "away_control"}
-    if rule_id == "home_win_ht":
-        return {"ht_home", "home_control"}
-    if rule_id == "draw_ht":
-        return {"ht_draw", "draw_scenario"}
-    if rule_id == "away_win_ht":
-        return {"ht_away", "away_control"}
+    tags = {
+        "home_win": {"ft_home", "home_control"},
+        "draw": {"ft_draw", "draw_scenario"},
+        "away_win": {"ft_away", "away_control"},
+        "home_win_ht": {"ht_home", "home_control"},
+        "draw_ht": {"ht_draw", "draw_scenario"},
+        "away_win_ht": {"ht_away", "away_control"},
+        "btts": {"both_score", "open_game"},
+        "clean_sheets": {"clean_sheet", "low_scoring"},
+    }
+    if rule_id in tags:
+        return set(tags[rule_id])
     if rule_id in HTFT_TAGS:
         return set(HTFT_TAGS[rule_id])
-    if rule_id == "btts":
-        return {"both_score", "open_game"}
-    if rule_id == "clean_sheets":
-        return {"clean_sheet", "low_scoring"}
     if rule_id in {"over15", "over25", "over35", "team_scored_twice"}:
         return {"high_scoring", "open_game"}
     if rule_id in {"under15", "under25", "under35"}:
@@ -141,11 +137,7 @@ def _robustness(rule_id: str) -> float:
 
 
 def _candidate(rec: Any, minimum_score: float, minimum_quality: float) -> bool:
-    return (
-        bool(rec.passed)
-        and float(rec.score) >= minimum_score
-        and float(rec.data_quality) >= minimum_quality
-    )
+    return bool(rec.passed) and float(rec.score) >= minimum_score and float(rec.data_quality) >= minimum_quality
 
 
 def _reject(rec: Any, reason: str) -> Any:
@@ -156,14 +148,11 @@ def _winner(items: Iterable[Any]) -> Any | None:
     candidates = list(items)
     if not candidates:
         return None
-    return max(
-        candidates,
-        key=lambda rec: (
-            float(rec.score),
-            float(rec.data_quality),
-            float(rec.raw_value if rec.raw_value is not None else -1),
-        ),
-    )
+    return max(candidates, key=lambda rec: (
+        float(rec.score),
+        float(rec.data_quality),
+        float(rec.raw_value if rec.raw_value is not None else -1),
+    ))
 
 
 def _base_selection_score(rec: Any) -> float:
@@ -261,6 +250,8 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
     independence_penalty = max(0.0, float(selection.get("independence_penalty_per_shared_tag", 0.12)))
     main_min_adjusted = max(0.0, float(selection.get("main_min_adjusted_score", 90)))
     additional_min_adjusted = max(0.0, float(selection.get("additional_min_adjusted_score", 82)))
+    four_plus_min_raw = max(0.0, float(selection.get("four_plus_min_raw_value", 50)))
+    four_plus_main_allowed = bool(selection.get("four_plus_main_allowed", False))
 
     current = _apply_half_outcome_lead_filter(
         list(recommendations), minimum_score, minimum_quality, minimum_half_outcome_lead
@@ -299,6 +290,16 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
             if rec.rule_id in group and rec.rule_id != keep.rule_id and _candidate(rec, minimum_score, minimum_quality):
                 current[index] = _reject(rec, f"sprzeczny z silniejszym rynkiem {keep.label}")
 
+    for index, rec in enumerate(current):
+        if str(rec.rule_id) != "total4plus" or not _candidate(rec, minimum_score, minimum_quality):
+            continue
+        raw = float(rec.raw_value if rec.raw_value is not None else -1)
+        if raw < four_plus_min_raw:
+            current[index] = _reject(
+                rec,
+                f"4+ to agresywny scenariusz; baza {raw:.1f}% < wymagane {four_plus_min_raw:g}%",
+            )
+
     categories = sorted({_category(str(rec.rule_id)) for rec in current})
     for category in categories:
         candidates = [
@@ -320,8 +321,12 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
                 current[index] = _reject(rec, f"słabszy, skorelowany rynek w kategorii {category}")
 
     surviving = [rec for rec in current if _candidate(rec, minimum_score, minimum_quality)]
+    main_candidates = [
+        rec for rec in surviving
+        if four_plus_main_allowed or str(rec.rule_id) != "total4plus"
+    ]
     main_picks = _pick_independent(
-        surviving, max_main, [], independence_penalty, main_min_adjusted
+        main_candidates, max_main, [], independence_penalty, main_min_adjusted
     )
     main_ids = {str(rec.rule_id) for rec, _ in main_picks}
     remaining = [rec for rec in surviving if str(rec.rule_id) not in main_ids]
@@ -348,9 +353,10 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
                 reasons=[*rec.reasons, f"Poziom selekcji: główny typ; selection score {score_by_id[rule_id]:.1f}"],
             )
         elif rule_id in additional_ids:
+            suffix = "; agresywny rynek 4+" if rule_id == "total4plus" else ""
             current[index] = replace(
                 rec,
-                reasons=[*rec.reasons, f"Poziom selekcji: dodatkowy sygnał; selection score {score_by_id[rule_id]:.1f}"],
+                reasons=[*rec.reasons, f"Poziom selekcji: dodatkowy sygnał; selection score {score_by_id[rule_id]:.1f}{suffix}"],
             )
         else:
             current[index] = _reject(
