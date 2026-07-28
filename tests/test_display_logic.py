@@ -14,9 +14,19 @@ def rec(*, passed=False, score=120, quality=100, reasons=None):
     }
 
 
-def test_selected_market_gets_top_label():
+def test_selected_market_without_tier_keeps_legacy_label():
     item = rec(passed=True)
     assert decision_label(item, SCORE_RANGE, QUALITY_RANGE) == "Wybrany do TOP 5"
+
+
+def test_main_pick_gets_main_label():
+    item = rec(passed=True, reasons=["Poziom selekcji: główny typ; selection score 123.4"])
+    assert decision_label(item, SCORE_RANGE, QUALITY_RANGE) == "Główny typ"
+
+
+def test_additional_signal_gets_additional_label():
+    item = rec(passed=True, reasons=["Poziom selekcji: dodatkowy sygnał; selection score 101.2"])
+    assert decision_label(item, SCORE_RANGE, QUALITY_RANGE) == "Dodatkowy sygnał"
 
 
 def test_category_rejection_is_readable_and_remains_candidate():
@@ -26,9 +36,9 @@ def test_category_rejection_is_readable_and_remains_candidate():
     assert decision_label(item, SCORE_RANGE, QUALITY_RANGE) == "Przegrał kategorię"
 
 
-def test_top_limit_rejection_is_readable():
-    item = rec(reasons=["Selekcja końcowa: poza końcowym TOP 5"])
-    assert decision_label(item, SCORE_RANGE, QUALITY_RANGE) == "Poza TOP 5"
+def test_final_list_rejection_is_readable():
+    item = rec(reasons=["Selekcja końcowa: poza końcową listą"])
+    assert decision_label(item, SCORE_RANGE, QUALITY_RANGE) == "Poza końcową listą"
 
 
 def test_ambiguous_half_outcome_is_readable():
