@@ -10,6 +10,7 @@ recommendations:
     enabled: true
     max_recommendations: 5
     max_per_category: 1
+    minimum_half_outcome_lead: 7.5
   goal_data_consistency:
     maximum_4plus_gap: 20
     over_quality_cap: 80
@@ -33,19 +34,14 @@ recommendations:
     - {id: btts, label: "BTTS TAK — obie drużyny strzelą", enabled: true, mode: special, conditions: [{metric: "Both Teams to Score", operator: ">=", threshold_home: 55, threshold_away: 55, minimum_btts: 45, minimum_team_scored: 70, maximum_under25: 65, dominance_min_goals: 2.0, dominance_min_gap: 1.0, dominance_min_clean_sheets: 40, dominance_max_weaker_goals: 1.2, dominance_escape_team_scored: 90, dominance_escape_btts: 70}]}
     - {id: btts_ht1, label: "Obie drużyny strzelą w 1. połowie", enabled: true, mode: both, conditions: [{metric: "BTTS in first-half", operator: ">=", threshold_home: 25, threshold_away: 25}]}
     - {id: btts_ht2, label: "Obie drużyny strzelą w 2. połowie", enabled: true, mode: both, conditions: [{metric: "BBTS in second-half", operator: ">=", threshold_home: 35, threshold_away: 35}]}
-    - {id: btts_over15, label: "BTTS TAK i powyżej 1,5 gola — wyłączone bez bramki rynków bazowych", enabled: false, mode: both, conditions: [{metric: "BBTS and Over 1.5", operator: ">=", threshold_home: 55, threshold_away: 55}]}
-    - {id: btts_over25, label: "BTTS TAK i powyżej 2,5 gola — wyłączone bez bramki rynków bazowych", enabled: false, mode: both, conditions: [{metric: "BBTS and Over 2.5", operator: ">=", threshold_home: 45, threshold_away: 45}]}
-    - {id: home_win_btts, label: "Wygra A i BTTS TAK — wyłączone bez bramki rynków bazowych", enabled: false, mode: special, conditions: [{metric: "Win and BTTS", operator: ">=", threshold_home: 30, threshold_away: 30}]}
-    - {id: draw_btts, label: "Remis i BTTS TAK — wyłączone bez bramki rynków bazowych", enabled: false, mode: mean, conditions: [{metric: "Draw and BTTS", operator: ">=", threshold_home: 20, threshold_away: 20}]}
-    - {id: away_win_btts, label: "Wygra B i BTTS TAK — wyłączone bez bramki rynków bazowych", enabled: false, mode: special, conditions: [{metric: "Win and BTTS", operator: ">=", threshold_home: 30, threshold_away: 30}]}
-    - {id: total0, label: "Suma goli: 0", enabled: true, mode: mean, conditions: [{metric: "Match total goals 0", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: total1, label: "Suma goli: 1", enabled: true, mode: mean, conditions: [{metric: "Match total goals 1", operator: ">=", threshold_home: 17.5, threshold_away: 17.5}]}
-    - {id: total2, label: "Suma goli: 2", enabled: true, mode: mean, conditions: [{metric: "Match total goals 2", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
-    - {id: total3, label: "Suma goli: 3", enabled: true, mode: mean, conditions: [{metric: "Match total goals 3", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
-    - {id: total4, label: "Suma goli: 4", enabled: true, mode: mean, conditions: [{metric: "Match total goals 4", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
-    - {id: total01, label: "Suma goli: 0–1", enabled: true, mode: mean, conditions: [{metric: "Match total goals 0 or 1", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
-    - {id: total23, label: "Suma goli: 2–3", enabled: true, mode: mean, conditions: [{metric: "Match total goals 2 or 3", operator: ">=", threshold_home: 47.5, threshold_away: 47.5}]}
-    - {id: total4plus, label: "Suma goli: 4+", enabled: true, mode: mean, conditions: [{metric: "Match total goals 4+", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
+    - {id: total0, label: "Dokładnie 0 goli", enabled: true, mode: mean, conditions: [{metric: "Match total goals 0", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: total1, label: "Dokładnie 1 gol", enabled: true, mode: mean, conditions: [{metric: "Match total goals 1", operator: ">=", threshold_home: 17.5, threshold_away: 17.5}]}
+    - {id: total2, label: "Dokładnie 2 gole", enabled: true, mode: mean, conditions: [{metric: "Match total goals 2", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
+    - {id: total3, label: "Dokładnie 3 gole", enabled: true, mode: mean, conditions: [{metric: "Match total goals 3", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
+    - {id: total4, label: "Dokładnie 4 gole", enabled: true, mode: mean, conditions: [{metric: "Match total goals 4", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
+    - {id: total01, label: "0–1 goli", enabled: true, mode: mean, conditions: [{metric: "Match total goals 0 or 1", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
+    - {id: total23, label: "2–3 gole", enabled: true, mode: mean, conditions: [{metric: "Match total goals 2 or 3", operator: ">=", threshold_home: 47.5, threshold_away: 47.5}]}
+    - {id: total4plus, label: "4+ gole", enabled: true, mode: mean, conditions: [{metric: "Match total goals 4+", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
     - {id: over15, label: "Powyżej 1,5 gola", enabled: true, mode: mean, conditions: [{metric: "Over 1.5 goals", operator: ">=", threshold_home: 75, threshold_away: 75}]}
     - {id: over25, label: "Powyżej 2,5 gola", enabled: true, mode: mean, conditions: [{metric: "Over 2.5 goals", operator: ">=", threshold_home: 67.5, threshold_away: 67.5}]}
     - {id: over35, label: "Powyżej 3,5 gola", enabled: true, mode: mean, conditions: [{metric: "Over 3.5 goals", operator: ">=", threshold_home: 47.5, threshold_away: 47.5}]}
@@ -55,12 +51,12 @@ recommendations:
     - {id: over05ht, label: "Powyżej 0,5 gola w 1. połowie", enabled: true, mode: mean, conditions: [{metric: "Over 0.5 goals at half-time", operator: ">=", threshold_home: 70, threshold_away: 70}]}
     - {id: over15ht, label: "Powyżej 1,5 gola w 1. połowie", enabled: true, mode: mean, conditions: [{metric: "Over 1.5 goals at half-time", operator: ">=", threshold_home: 47.5, threshold_away: 47.5}]}
     - {id: over25ht, label: "Powyżej 2,5 gola w 1. połowie", enabled: true, mode: mean, conditions: [{metric: "Over 2.5 goals at half-time", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
-    - {id: win_win, label: "HT/FT: A/A", enabled: true, mode: mean, conditions: [{metric: "Win HT - Win FT", operator: ">=", threshold_home: 32.5, threshold_away: 32.5}]}
-    - {id: win_draw, label: "HT/FT: A/X", enabled: true, mode: mean, conditions: [{metric: "Win HT - Draw FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: win_lose, label: "HT/FT: A/B", enabled: true, mode: mean, conditions: [{metric: "Win HT - Lose FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: draw_win, label: "HT/FT: X/A", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Win FT", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
-    - {id: draw_draw, label: "HT/FT: X/X", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Draw FT", operator: ">=", threshold_home: 17.5, threshold_away: 17.5}]}
-    - {id: draw_lose, label: "HT/FT: X/B", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Lose FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: lose_win, label: "HT/FT: B/A", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Win FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: lose_draw, label: "HT/FT: B/X", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Draw FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: lose_lose, label: "HT/FT: B/B", enabled: false, mode: mean, conditions: [{metric: "Lose HT - Lose FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: win_win, label: "A/A — A prowadzi HT i wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Win FT", operator: ">=", threshold_home: 32.5, threshold_away: 32.5}]}
+    - {id: win_draw, label: "A/X — A prowadzi HT, remis FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Draw FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: win_lose, label: "A/B — A prowadzi HT, B wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Lose FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: draw_win, label: "X/A — remis HT, A wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Win FT", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
+    - {id: draw_draw, label: "X/X — remis HT i remis FT", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Draw FT", operator: ">=", threshold_home: 17.5, threshold_away: 17.5}]}
+    - {id: draw_lose, label: "X/B — remis HT, B wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Lose FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: lose_win, label: "B/A — B prowadzi HT, A wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Win FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: lose_draw, label: "B/X — B prowadzi HT, remis FT", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Draw FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: lose_lose, label: "B/B — B prowadzi HT i wygrywa FT", enabled: false, mode: mean, conditions: [{metric: "Lose HT - Lose FT", operator: ">=", threshold_home: 32.5, threshold_away: 32.5}]}
