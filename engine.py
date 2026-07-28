@@ -6,7 +6,7 @@ from typing import Any
 import engine_core as core
 from selection import apply_final_selection
 
-ALGORITHM_VERSION = "2.8.0"
+ALGORITHM_VERSION = "2.9.0"
 METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
@@ -33,180 +33,132 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     names = ["Both Teams to Score", "Team scored", "Under 2.5 goals", "Goals scored per game", "Goals conceded per game", "Clean sheets"]
     values = {name: core._find_metric(stats, name) for name in names}
     missing = [name for name, value in values.items() if value is None]
+    threshold = float(condition.get("threshold_home", condition.get("threshold", 55)))
     if missing:
-        return Recommendation(
-            rule["id"], rule["label"], 0.0, False,
-            ["Brak danych do zabezpieczonej formuły BTTS: " + ", ".join(missing)],
-            100.0 * (len(names) - len(missing)) / len(names), mode="special",
-        )
+        return Recommendation(rule["id"], rule["label"], False, 0.0, None, threshold, "special", ["Brak danych: " + ", ".join(missing)], 0.0)
 
-    btts = values["Both Teams to Score"]
-    team_scored = values["Team scored"]
-    under25 = values["Under 2.5 goals"]
-    goals = values["Goals scored per game"]
-    conceded = values["Goals conceded per game"]
-    clean = values["Clean sheets"]
-    assert btts and team_scored and under25 and goals and conceded and clean
+    btts_home, btts_away = values["Both Teams to Score"]
+    scored_home, scored_away = values["Team scored"]
+    under_home, under_away = values["Under 2.5 goals"]
+    goals_home, goals_away = values["Goals scored per game"]
+    conceded_home, conceded_away = values["Goals conceded per game"]
+    clean_home, clean_away = values["Clean sheets"]
 
-    bh, ba = float(btts["home"]), float(btts["away"])
-    tsh, tsa = float(team_scored["home"]), float(team_scored["away"])
-    gh, ga = float(goals["home"]), float(goals["away"])
-    ch, ca = float(conceded["home"]), float(conceded["away"])
-    csh, csa = float(clean["home"]), float(clean["away"])
-    btts_mean, btts_min = (bh + ba) / 2, min(bh, ba)
-    under_mean = (float(under25["home"]) + float(under25["away"])) / 2
-    th, ta = core._thresholds(condition)
-    mean_threshold = (th + ta) / 2
+    btts_mean = (btts_home + btts_away) / 2
+    btts_min = min(btts_home, btts_away)
+    under_mean = (under_home + under_away) / 2
+    minimum_btts = max(50.0, float(condition.get("minimum_btts", 45)))
+    minimum_team_scored = float(condition.get("minimum_team_scored", 70))
+    maximum_under25 = float(condition.get("maximum_under25", 65))
 
-    minimum_btts = max(50.0, float(condition.get("minimum_btts", 50)))
-    minimum_team_scored = max(70.0, float(condition.get("minimum_team_scored", 70)))
-    minimum_side_goals = max(1.0, float(condition.get("minimum_side_goals", 1.0)))
-    minimum_strong_goals = max(1.4, float(condition.get("minimum_strong_side_goals", 1.4)))
-    maximum_under25 = min(65.0, float(condition.get("maximum_under25", 65)))
-    minimum_scoring_base = max(60.0, float(condition.get("minimum_scoring_base", 60)))
-    strong_clean_base = max(60.0, float(condition.get("strong_clean_sheet_base", 60)))
+    scoring_home = (scored_home + btts_home + (100 - clean_away) + _conceding_support(conceded_away)) / 4
+    scoring_away = (scored_away + btts_away + (100 - clean_home) + _conceding_support(conceded_home)) / 4
+    clean_home_base = (clean_home + (100 - scored_away)) / 2
+    clean_away_base = (clean_away + (100 - scored_home)) / 2
+    clean_conflict = max(clean_home_base, clean_away_base) >= 60
 
-    scoring_home = (tsh + bh + (100 - csa) + _conceding_support(ca)) / 4
-    scoring_away = (tsa + ba + (100 - csh) + _conceding_support(ch)) / 4
-    clean_base_home = (csh + (100 - tsa)) / 2
-    clean_base_away = (csa + (100 - tsh)) / 2
-    no_clean_conflict = max(clean_base_home, clean_base_away) < strong_clean_base
+    defensive_home = clean_home >= 50 and conceded_home <= 0.8 and goals_away <= 1.0
+    defensive_away = clean_away >= 50 and conceded_away <= 0.8 and goals_home <= 1.0
+    defensive_block = defensive_home or defensive_away
 
-    dominant = "home" if gh >= ga else "away"
-    weaker = "away" if dominant == "home" else "home"
-    dominant_goals, weaker_goals = float(goals[dominant]), float(goals[weaker])
-    dominance = (
-        dominant_goals >= float(condition.get("dominance_min_goals", 2.0))
-        and dominant_goals - weaker_goals >= float(condition.get("dominance_min_gap", 1.0))
-        and float(clean[dominant]) >= float(condition.get("dominance_min_clean_sheets", 40))
-        and weaker_goals <= float(condition.get("dominance_max_weaker_goals", 1.2))
-    )
-    escape = (
-        float(team_scored[weaker]) >= float(condition.get("dominance_escape_team_scored", 90))
-        and float(btts[weaker]) >= float(condition.get("dominance_escape_btts", 70))
-    )
-    no_dominance_block = not dominance or escape
+    dominance_min_goals = float(condition.get("dominance_min_goals", 2.0))
+    dominance_min_gap = float(condition.get("dominance_min_gap", 1.0))
+    dominance_min_clean = float(condition.get("dominance_min_clean_sheets", 40))
+    dominance_max_weaker = float(condition.get("dominance_max_weaker_goals", 1.2))
+    dominance_escape_scored = float(condition.get("dominance_escape_team_scored", 90))
+    dominance_escape_btts = float(condition.get("dominance_escape_btts", 70))
 
-    defensive_home = csh >= 50 and ch <= 0.8 and ga <= 1.0
-    defensive_away = csa >= 50 and ca <= 0.8 and gh <= 1.0
-    no_defensive_block = not defensive_home and not defensive_away
+    home_dominance = goals_home >= dominance_min_goals and goals_home - goals_away >= dominance_min_gap and clean_home >= dominance_min_clean and goals_away <= dominance_max_weaker
+    away_dominance = goals_away >= dominance_min_goals and goals_away - goals_home >= dominance_min_gap and clean_away >= dominance_min_clean and goals_home <= dominance_max_weaker
+    dominance_block = home_dominance or away_dominance
+    if home_dominance and scored_away >= dominance_escape_scored and btts_away >= dominance_escape_btts:
+        dominance_block = False
+    if away_dominance and scored_home >= dominance_escape_scored and btts_home >= dominance_escape_btts:
+        dominance_block = False
 
-    checks = {
-        "średnia BTTS": btts_mean >= mean_threshold,
-        "minimum BTTS": btts_min >= minimum_btts,
-        "Team scored A": tsh >= minimum_team_scored,
-        "Team scored B": tsa >= minimum_team_scored,
-        "gole A": gh >= minimum_side_goals,
-        "gole B": ga >= minimum_side_goals,
-        "mocniejsza ofensywa": max(gh, ga) >= minimum_strong_goals,
-        "średni Under 2,5": under_mean < maximum_under25,
-        "scoring base A": scoring_home >= minimum_scoring_base,
-        "scoring base B": scoring_away >= minimum_scoring_base,
-        "brak twardego konfliktu clean sheet": no_clean_conflict,
-        "brak bloku defensywnego": no_defensive_block,
-        "brak bloku dominacji jednostronnej": no_dominance_block,
-    }
+    checks = [
+        (btts_mean >= threshold, f"Średnia BTTS {btts_mean:.1f}% ≥ {threshold:g}%"),
+        (btts_min >= minimum_btts, f"Słabsza strona BTTS {btts_min:.1f}% ≥ {minimum_btts:g}%"),
+        (scored_home >= minimum_team_scored, f"Team scored A {scored_home:.1f}% ≥ {minimum_team_scored:g}%"),
+        (scored_away >= minimum_team_scored, f"Team scored B {scored_away:.1f}% ≥ {minimum_team_scored:g}%"),
+        (goals_home >= 1.0, f"Gole A {goals_home:.2f} ≥ 1.00"),
+        (goals_away >= 1.0, f"Gole B {goals_away:.2f} ≥ 1.00"),
+        (max(goals_home, goals_away) >= 1.4, f"Mocniejsza ofensywa {max(goals_home, goals_away):.2f} ≥ 1.40"),
+        (under_mean < maximum_under25, f"Średni Under 2.5 {under_mean:.1f}% < {maximum_under25:g}%"),
+        (scoring_home >= 60, f"Baza strzelenia A {scoring_home:.1f}% ≥ 60%"),
+        (scoring_away >= 60, f"Baza strzelenia B {scoring_away:.1f}% ≥ 60%"),
+        (not clean_conflict, f"Brak konfliktu clean sheet (max baza {max(clean_home_base, clean_away_base):.1f}% < 60%)"),
+        (not defensive_block, "Brak twardego bloku defensywnego"),
+        (not dominance_block, "Brak twardego bloku dominacji"),
+    ]
+    passed = all(ok for ok, _ in checks)
     scores = [
-        core._strength(btts_mean, mean_threshold, ">="), core._strength(btts_min, minimum_btts, ">="),
-        core._strength(tsh, minimum_team_scored, ">="), core._strength(tsa, minimum_team_scored, ">="),
-        core._strength(gh, minimum_side_goals, ">="), core._strength(ga, minimum_side_goals, ">="),
-        core._strength(max(gh, ga), minimum_strong_goals, ">="), core._strength(under_mean, maximum_under25, "<"),
-        core._strength(scoring_home, minimum_scoring_base, ">="), core._strength(scoring_away, minimum_scoring_base, ">="),
-        100.0 if no_clean_conflict else 0.0, 100.0 if no_defensive_block else 0.0, 100.0 if no_dominance_block else 0.0,
+        core._strength(btts_mean, threshold, ">="),
+        core._strength(btts_min, minimum_btts, ">="),
+        core._strength(scored_home, minimum_team_scored, ">="),
+        core._strength(scored_away, minimum_team_scored, ">="),
+        core._strength(goals_home, 1.0, ">="),
+        core._strength(goals_away, 1.0, ">="),
+        core._strength(max(goals_home, goals_away), 1.4, ">="),
+        core._strength(under_mean, maximum_under25, "<"),
+        core._strength(scoring_home, 60, ">="),
+        core._strength(scoring_away, 60, ">="),
+        100.0 if not clean_conflict else 0.0,
+        100.0 if not defensive_block else 0.0,
+        100.0 if not dominance_block else 0.0,
     ]
-    reasons = [
-        f"BTTS średnia: {btts_mean:.1f}, próg {mean_threshold:g}; minimum strony {btts_min:.1f}/{minimum_btts:g}",
-        f"Team scored: A {tsh:.1f}, B {tsa:.1f}; minimum {minimum_team_scored:g}",
-        f"Gole na mecz: A {gh:.2f}, B {ga:.2f}; minimum obu {minimum_side_goals:g}, jednej {minimum_strong_goals:g}",
-        f"Scoring base A: {scoring_home:.1f}, B: {scoring_away:.1f}; minimum {minimum_scoring_base:g}",
-        f"Baza clean sheet A: {clean_base_home:.1f}, B: {clean_base_away:.1f}; twardy blok od {strong_clean_base:g}",
-        f"Blok defensywny: A={'TAK' if defensive_home else 'NIE'}, B={'TAK' if defensive_away else 'NIE'}",
-        f"Blok dominacji jednostronnej: {'TAK' if dominance and not escape else 'NIE'}",
-        f"Średni Under 2,5: {under_mean:.1f}, wymagane poniżej {maximum_under25:g}",
-        "Warunki: " + ", ".join(f"{name}={'TAK' if ok else 'NIE'}" for name, ok in checks.items()),
-    ]
-    return Recommendation(rule["id"], rule["label"], round(sum(scores) / len(scores), 1), all(checks.values()), reasons, 100.0, btts_mean, mean_threshold, "special")
+    score = round(sum(scores) / len(scores), 1)
+    reasons = [("TAK: " if ok else "NIE: ") + text for ok, text in checks]
+    return Recommendation(rule["id"], rule["label"], passed, score, round(btts_mean, 2), threshold, "special", reasons, 100.0)
 
 
-def _evaluate_clean_sheets(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
-    condition = (rule.get("conditions") or [{}])[0]
-    clean = core._find_metric(stats, "Clean sheets")
-    scored = core._find_metric(stats, "Team scored")
-    missing = [name for name, value in (("Clean sheets", clean), ("Team scored", scored)) if value is None]
-    if missing:
-        return Recommendation(rule["id"], rule["label"], 0.0, False, ["Brak danych do zabezpieczonej formuły czystego konta: " + ", ".join(missing)], 100.0 * (2 - len(missing)) / 2, mode="special")
-    assert clean and scored
-    th, ta = core._thresholds(condition)
-    threshold = float(condition.get("minimum_clean_sheet_base", (th + ta) / 2))
-    home = (float(clean["home"]) + 100 - float(scored["away"])) / 2
-    away = (float(clean["away"]) + 100 - float(scored["home"])) / 2
-    raw = max(home, away)
-    passed = raw >= threshold
-    score = round(core._strength(raw, threshold, ">="), 1)
+def _goal_data_quality(stats: dict[str, dict[str, float]], config: dict[str, Any]) -> tuple[bool, list[str]]:
+    total4plus = core._find_metric(stats, "Match total goals 4+")
+    total4 = core._find_metric(stats, "Match total goals 4")
+    under35 = core._find_metric(stats, "Under 3.5 goals")
+    if total4plus is None or total4 is None or under35 is None:
+        return False, ["Brak pełnych danych do kontroli sum goli"]
 
-    if passed and raw < 55.0:
-        score = min(score, 104.9)
-        tier = "BORDERLINE"
-    elif raw < 60.0:
-        tier = "FORMAL"
-    else:
-        tier = "STRONG"
-
-    reasons = [
-        f"Baza czystego konta A: {home:.1f}",
-        f"Baza czystego konta B: {away:.1f}",
-        f"Najlepsza baza {raw:.1f}, próg {threshold:g}",
-        f"Poziom sygnału clean sheet: {tier} (45–54,9 graniczny; 55–59,9 formalny; 60+ mocny)",
-    ]
-    return Recommendation(rule["id"], rule["label"], score, passed, reasons, 100.0, raw, threshold, "special")
-
-
-def _goal_data_conflicts(stats: dict[str, dict[str, float]], settings: dict[str, Any] | None = None) -> list[str]:
-    settings = settings or {}
-    under = core._find_metric(stats, "Under 3.5 goals")
-    reported = core._find_metric(stats, "Match total goals 4+")
-    exact = core._find_metric(stats, "Match total goals 4")
-    if under is None or reported is None:
-        return []
-    conflicts = []
-    for side, label in (("home", "A"), ("away", "B")):
-        derived, shown = 100 - float(under[side]), float(reported[side])
-        gap = abs(derived - shown)
-        if gap > float(settings.get("maximum_4plus_gap", 20)):
-            conflicts.append(f"strona {label}: oczekiwane 4+ {derived:.1f}%, podane {shown:.1f}%, różnica {gap:.1f} pp")
-        if exact is not None and float(exact[side]) > shown:
-            conflicts.append(f"strona {label}: dokładnie 4 gole {float(exact[side]):.1f}% przekracza 4+ {shown:.1f}%")
-    return conflicts
-
-
-def _apply_goal_data_quality(stats: dict[str, dict[str, float]], rule: dict[str, Any], result: Recommendation, settings: dict[str, Any] | None = None) -> Recommendation:
-    settings = settings or {}
-    rule_id = str(rule.get("id") or "")
-    reasons = list(result.reasons)
-    goals = core._find_metric(stats, "Goals scored per game")
-    extreme = float(settings.get("extreme_goals_warning", 3.0))
-    if goals is not None and max(float(goals["home"]), float(goals["away"])) >= extreme and rule_id in OVER_QUALITY_RULE_IDS:
-        reasons.append(f"Ostrzeżenie: ekstremalna średnia goli ≥ {extreme:g}; możliwy wpływ wyników odstających.")
-    conflicts = _goal_data_conflicts(stats, settings)
-    if not conflicts:
-        return replace(result, reasons=reasons)
-    reasons.append("Niespójność danych bramkowych: " + " | ".join(conflicts))
-    if rule_id in EXACT_TOTAL_RULE_IDS:
-        return replace(result, passed=False, data_quality=0.0, reasons=reasons)
-    if rule_id in TOTAL_QUALITY_RULE_IDS:
-        cap = float(settings.get("total_quality_cap", settings.get("over_quality_cap", 80)))
-        return replace(result, data_quality=min(result.data_quality, cap), reasons=reasons)
-    return replace(result, reasons=reasons)
-
-
-def evaluate_rule(stats: dict[str, dict[str, float]], rule: dict[str, Any], consistency_config: dict[str, Any] | None = None) -> Recommendation:
-    rule_id = str(rule.get("id") or "")
-    result = _evaluate_btts(stats, rule) if rule_id == "btts" else _evaluate_clean_sheets(stats, rule) if rule_id == "clean_sheets" else core.evaluate_rule(stats, rule)
-    return _apply_goal_data_quality(stats, rule, result, consistency_config)
+    cfg = config.get("recommendations", {}).get("goal_data_consistency", {})
+    maximum_gap = float(cfg.get("maximum_4plus_gap", 20))
+    reasons = []
+    conflict = False
+    for side, index in (("A", 0), ("B", 1)):
+        reported = float(total4plus[index])
+        exact4 = float(total4[index])
+        derived = 100.0 - float(under35[index])
+        gap = abs(reported - derived)
+        if gap > maximum_gap:
+            conflict = True
+            reasons.append(f"{side}: 4+ {reported:.1f}% vs 100-Under3.5 {derived:.1f}% (różnica {gap:.1f} pp)")
+        if exact4 > reported:
+            conflict = True
+            reasons.append(f"{side}: dokładnie 4 gole {exact4:.1f}% > zgłoszone 4+ {reported:.1f}%")
+    return conflict, reasons
 
 
 def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recommendation]:
-    recommendations = config.get("recommendations", {})
-    settings = recommendations.get("goal_data_consistency", {})
-    raw = [evaluate_rule(match.get("stats", {}), rule, settings) for rule in recommendations.get("rules", []) if rule.get("enabled", True)]
-    return apply_final_selection(raw, config)
+    stats = match.get("stats", {})
+    recommendations = []
+    for rule in config["recommendations"].get("rules", []):
+        if not rule.get("enabled", True):
+            continue
+        if rule.get("id") == "btts":
+            recommendations.append(_evaluate_btts(stats, rule))
+        else:
+            recommendations.append(core.evaluate_rule(stats, rule))
+
+    conflict, conflict_reasons = _goal_data_quality(stats, config)
+    if conflict:
+        cap = float(config.get("recommendations", {}).get("goal_data_consistency", {}).get("over_quality_cap", 80))
+        adjusted = []
+        for rec in recommendations:
+            if rec.rule_id in EXACT_TOTAL_RULE_IDS:
+                adjusted.append(replace(rec, passed=False, data_quality=0.0, reasons=[*rec.reasons, "Konflikt danych sum goli: " + " | ".join(conflict_reasons)]))
+            elif rec.rule_id in TOTAL_QUALITY_RULE_IDS:
+                adjusted.append(replace(rec, data_quality=min(float(rec.data_quality), cap), reasons=[*rec.reasons, "Obniżona jakość danych sum goli: " + " | ".join(conflict_reasons)]))
+            else:
+                adjusted.append(rec)
+        recommendations = adjusted
+
+    return apply_final_selection(recommendations, config)
