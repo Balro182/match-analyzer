@@ -82,6 +82,62 @@ def _winner(items: Iterable[Any]) -> Any | None:
     )
 
 
+def _apply_half_outcome_lead_filter(
+    current: list[Any],
+    minimum_score: float,
+    minimum_quality: float,
+    minimum_lead: float,
+) -> list[Any]:
+    """Require a unique, clear raw-value leader among H/X/A first-half outcomes.
+
+    Different HT markets have different rule thresholds, so comparing only normalized
+    scores can favor the market with the lowest threshold. This filter compares the
+    underlying H/X/A bases before HT/FT confirmation and rejects a qualified market
+    when it is tied or leads the second-best base by less than ``minimum_lead``.
+    """
+    half_outcomes = [
+        rec
+        for rec in current
+        if str(rec.rule_id) in HALF_OUTCOME_IDS
+        and rec.raw_value is not None
+        and float(rec.data_quality) >= minimum_quality
+    ]
+    if len(half_outcomes) < 2:
+        return current
+
+    ordered = sorted(
+        half_outcomes,
+        key=lambda rec: float(rec.raw_value),
+        reverse=True,
+    )
+    best_raw = float(ordered[0].raw_value)
+    second_raw = float(ordered[1].raw_value)
+    lead = best_raw - second_raw
+    leaders = [rec for rec in half_outcomes if float(rec.raw_value) == best_raw]
+    unique_leader_id = str(leaders[0].rule_id) if len(leaders) == 1 else None
+
+    result = list(current)
+    for index, rec in enumerate(result):
+        if str(rec.rule_id) not in HALF_OUTCOME_IDS or not _candidate(rec, minimum_score, minimum_quality):
+            continue
+        if unique_leader_id is None:
+            result[index] = _reject(
+                rec,
+                f"brak jednoznacznego lidera 1X2 HT; najlepsze bazy są równe ({best_raw:g}%)",
+            )
+        elif str(rec.rule_id) != unique_leader_id:
+            result[index] = _reject(
+                rec,
+                f"nie jest najwyższą surową bazą 1X2 HT; lider ma {best_raw:g}%",
+            )
+        elif lead < minimum_lead:
+            result[index] = _reject(
+                rec,
+                f"przewaga bazy 1X2 HT tylko {lead:g} pp; wymagane minimum {minimum_lead:g} pp",
+            )
+    return result
+
+
 def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) -> list[Any]:
     """Turns independent rule hits into a small, coherent final betting shortlist.
 
@@ -98,13 +154,24 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
     minimum_quality = float(rec_cfg.get("min_data_quality", 100))
     max_recommendations = max(1, int(selection.get("max_recommendations", 5)))
     max_per_category = max(1, int(selection.get("max_per_category", 1)))
+    minimum_half_outcome_lead = max(0.0, float(selection.get("minimum_half_outcome_lead", 7.5)))
 
     current = list(recommendations)
 
     def index_by_id() -> dict[str, Any]:
         return {str(rec.rule_id): rec for rec in current}
 
-    # 1. HT/FT: wymagamy niezależnego potwierdzenia obu składowych.
+    # 1. Czysty wynik pierwszej połowy wymaga jednoznacznie najwyższej surowej bazy
+    # i przewagi nad drugim scenariuszem. Chroni to przed premią wynikającą wyłącznie
+    # z niższego progu remisu HT.
+    current = _apply_half_outcome_lead_filter(
+        current,
+        minimum_score,
+        minimum_quality,
+        minimum_half_outcome_lead,
+    )
+
+    # 2. HT/FT: wymagamy niezależnego potwierdzenia obu składowych już po filtrze HT.
     indexed = index_by_id()
     for index, rec in enumerate(current):
         requirements = HTFT_REQUIREMENTS.get(str(rec.rule_id))
@@ -114,7 +181,7 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
         if missing:
             current[index] = _reject(rec, "HT/FT bez potwierdzenia składowych: " + ", ".join(missing))
 
-    # 2. Rynki wzajemnie wykluczające się: zostaje tylko najsilniejszy sygnał.
+    # 3. Rynki wzajemnie wykluczające się: zostaje tylko najsilniejszy sygnał.
     for group, label in ((OUTCOME_IDS, "1X2"), (HALF_OUTCOME_IDS, "wynik pierwszej połowy")):
         candidates = [rec for rec in current if rec.rule_id in group and _candidate(rec, minimum_score, minimum_quality)]
         keep = _winner(candidates)
@@ -124,7 +191,7 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
             if rec.rule_id in group and rec.rule_id != keep.rule_id and _candidate(rec, minimum_score, minimum_quality):
                 current[index] = _reject(rec, f"słabszy, wzajemnie wykluczający się sygnał ({label}); wybrano {keep.label}")
 
-    # 3. Jawne sprzeczności, np. BTTS i clean sheet lub Over i Under tej samej linii.
+    # 4. Jawne sprzeczności, np. BTTS i clean sheet lub Over i Under tej samej linii.
     for group in CONTRADICTION_GROUPS:
         candidates = [rec for rec in current if rec.rule_id in group and _candidate(rec, minimum_score, minimum_quality)]
         keep = _winner(candidates)
@@ -134,7 +201,7 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
             if rec.rule_id in group and rec.rule_id != keep.rule_id and _candidate(rec, minimum_score, minimum_quality):
                 current[index] = _reject(rec, f"sprzeczny z silniejszym rynkiem {keep.label}")
 
-    # 4. W jednej kategorii nie pokazujemy wielu silnie skorelowanych odmian tego samego pomysłu.
+    # 5. W jednej kategorii nie pokazujemy wielu silnie skorelowanych odmian tego samego pomysłu.
     categories = sorted({_category(str(rec.rule_id)) for rec in current})
     for category in categories:
         candidates = [rec for rec in current if _category(str(rec.rule_id)) == category and _candidate(rec, minimum_score, minimum_quality)]
@@ -144,7 +211,7 @@ def apply_final_selection(recommendations: list[Any], config: dict[str, Any]) ->
             if _category(str(rec.rule_id)) == category and _candidate(rec, minimum_score, minimum_quality) and str(rec.rule_id) not in keep_ids:
                 current[index] = _reject(rec, f"słabszy, skorelowany rynek w kategorii {category}")
 
-    # 5. Końcowa krótka lista. Wyżej stawiamy score, potem jakość i surową wartość.
+    # 6. Końcowa krótka lista. Wyżej stawiamy score, potem jakość i surową wartość.
     surviving = [rec for rec in current if _candidate(rec, minimum_score, minimum_quality)]
     ordered = sorted(
         surviving,
