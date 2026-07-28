@@ -4,6 +4,8 @@ from typing import Any
 
 
 SELECTION_PREFIX = "Selekcja końcowa:"
+MAIN_LEVEL_PREFIX = "Poziom selekcji: główny typ"
+ADDITIONAL_LEVEL_PREFIX = "Poziom selekcji: dodatkowy sygnał"
 
 
 def meets_runtime_filters(
@@ -27,6 +29,16 @@ def selection_reason(rec: dict[str, Any]) -> str | None:
     return None
 
 
+def selection_level(rec: dict[str, Any]) -> str | None:
+    for reason in reversed(rec.get("reasons", [])):
+        normalized = str(reason).casefold()
+        if MAIN_LEVEL_PREFIX.casefold() in normalized:
+            return "main"
+        if ADDITIONAL_LEVEL_PREFIX.casefold() in normalized:
+            return "additional"
+    return None
+
+
 def was_candidate_before_selection(
     rec: dict[str, Any],
     score_range: tuple[int, int],
@@ -44,8 +56,13 @@ def decision_label(
 ) -> str:
     in_filters = meets_runtime_filters(rec, score_range, quality_range)
     reason = selection_reason(rec)
+    level = selection_level(rec)
 
     if bool(rec.get("passed")) and in_filters:
+        if level == "main":
+            return "Główny typ"
+        if level == "additional":
+            return "Dodatkowy sygnał"
         return "Wybrany do TOP 5"
 
     if not in_filters:
@@ -64,8 +81,8 @@ def decision_label(
         return "Nie przeszedł progu reguły"
 
     normalized = reason.casefold()
-    if "poza końcowym top" in normalized:
-        return "Poza TOP 5"
+    if "poza końcowym top" in normalized or "poza końcową listą" in normalized:
+        return "Poza końcową listą"
     if "kategorii" in normalized:
         return "Przegrał kategorię"
     if "ht/ft bez potwierdzenia" in normalized:
