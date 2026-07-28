@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from math import exp
 from typing import Any
 
@@ -12,7 +12,11 @@ class ExactScorePick:
     raw_score: float
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "score": self.score,
+            "model_share": f"{self.model_share:.0f}%",
+            "raw_score": self.raw_score,
+        }
 
 
 def _metric(stats: dict[str, Any], name: str) -> tuple[float, float] | None:
