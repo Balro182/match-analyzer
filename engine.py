@@ -6,7 +6,7 @@ from typing import Any
 import engine_core as core
 from selection import apply_final_selection
 
-ALGORITHM_VERSION = "2.9.0"
+ALGORITHM_VERSION = "2.10.0"
 METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
@@ -14,6 +14,25 @@ metric_label = core.metric_label
 EXACT_TOTAL_RULE_IDS = {"total0", "total1", "total2", "total3", "total4", "total01", "total23", "total4plus"}
 TOTAL_QUALITY_RULE_IDS = {"over25", "over35", "under25", "under35"}
 OVER_QUALITY_RULE_IDS = {"over25", "over35"}
+HTFT_RULE_IDS = {
+    "win_win", "win_draw", "win_lose",
+    "draw_win", "draw_draw", "draw_lose",
+    "lose_win", "lose_draw", "lose_lose",
+}
+
+# Perspektywa meczu A–B. Druga metryka jest komplementarnym przebiegiem
+# z perspektywy drużyny gości, a nie tą samą etykietą co dla gospodarza.
+HTFT_DIRECTIONAL_PAIRS = {
+    "win_win": ("Win HT - Win FT", "Lose HT - Lose FT", "A/A"),
+    "win_draw": ("Win HT - Draw FT", "Lose HT - Draw FT", "A/X"),
+    "win_lose": ("Win HT - Lose FT", "Lose HT - Win FT", "A/B"),
+    "draw_win": ("Draw HT - Win FT", "Draw HT - Lose FT", "X/A"),
+    "draw_draw": ("Draw HT - Draw FT", "Draw HT - Draw FT", "X/X"),
+    "draw_lose": ("Draw HT - Lose FT", "Draw HT - Win FT", "X/B"),
+    "lose_win": ("Lose HT - Win FT", "Win HT - Lose FT", "B/A"),
+    "lose_draw": ("Lose HT - Draw FT", "Win HT - Draw FT", "B/X"),
+    "lose_lose": ("Lose HT - Lose FT", "Win HT - Win FT", "B/B"),
+}
 
 
 def _conceding_support(value: float) -> float:
@@ -26,6 +45,58 @@ def _conceding_support(value: float) -> float:
     if value <= 1.6:
         return 80.0
     return 100.0
+
+
+def _evaluate_htft(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
+    rule_id = str(rule.get("id") or "")
+    home_metric_name, away_metric_name, formula_label = HTFT_DIRECTIONAL_PAIRS[rule_id]
+    home_metric = core._find_metric(stats, home_metric_name)
+    away_metric = core._find_metric(stats, away_metric_name)
+    condition = (rule.get("conditions") or [{}])[0]
+    threshold_home, threshold_away = core._thresholds(condition)
+    threshold = (threshold_home + threshold_away) / 2
+
+    missing = []
+    if home_metric is None:
+        missing.append(home_metric_name)
+    if away_metric is None:
+        missing.append(away_metric_name)
+    if missing:
+        return Recommendation(
+            rule_id=rule_id,
+            label=rule["label"],
+            score=0.0,
+            passed=False,
+            reasons=["Brak danych do kierunkowej formuły HT/FT: " + ", ".join(missing)],
+            data_quality=0.0,
+            raw_value=None,
+            threshold=threshold,
+            mode="special",
+        )
+
+    home_value = float(home_metric["home"])
+    away_value = float(away_metric["away"])
+    value = (home_value + away_value) / 2
+    op_text = str(condition.get("operator", ">="))
+    passed = core.OPS[op_text](value, threshold)
+    score = round(core._strength(value, threshold, op_text), 1)
+    reasons = [
+        f"Kierunkowe HT/FT {formula_label}: ",
+        f"profil A {home_metric_name} = {home_value:.1f}%",
+        f"profil B {away_metric_name} = {away_value:.1f}%",
+        f"średnia ({home_value:.1f} + {away_value:.1f}) / 2 = {value:.1f}%; próg {threshold:g}%; score {score:.1f}",
+    ]
+    return Recommendation(
+        rule_id=rule_id,
+        label=rule["label"],
+        score=score,
+        passed=passed,
+        reasons=reasons,
+        data_quality=100.0,
+        raw_value=round(value, 2),
+        threshold=threshold,
+        mode="special",
+    )
 
 
 def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
@@ -143,8 +214,11 @@ def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recomme
     for rule in config["recommendations"].get("rules", []):
         if not rule.get("enabled", True):
             continue
-        if rule.get("id") == "btts":
+        rule_id = str(rule.get("id") or "")
+        if rule_id == "btts":
             recommendations.append(_evaluate_btts(stats, rule))
+        elif rule_id in HTFT_RULE_IDS:
+            recommendations.append(_evaluate_htft(stats, rule))
         else:
             recommendations.append(core.evaluate_rule(stats, rule))
 
