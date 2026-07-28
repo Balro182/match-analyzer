@@ -9,8 +9,13 @@ recommendations:
   selection:
     enabled: true
     max_recommendations: 5
+    max_main_recommendations: 3
+    max_additional_signals: 2
     max_per_category: 1
     minimum_half_outcome_lead: 7.5
+    independence_penalty_per_shared_tag: 0.12
+    main_min_adjusted_score: 90
+    additional_min_adjusted_score: 82
   goal_data_consistency:
     maximum_4plus_gap: 20
     over_quality_cap: 80
