@@ -14,7 +14,7 @@ class ExactScorePick:
     def to_dict(self) -> dict[str, Any]:
         return {
             "score": self.score,
-            "model_share": f"{self.model_share:.0f}%",
+            "model_share": self.model_share,
             "raw_score": self.raw_score,
         }
 
