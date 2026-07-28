@@ -7,13 +7,17 @@ import pandas as pd
 import streamlit as st
 import yaml
 
+from display_logic import (
+    decision_label,
+    meets_runtime_filters,
+    was_candidate_before_selection,
+)
 from engine import ALGORITHM_VERSION, analyze_match
 from exact_score import exact_score_diagnostics
 from manual_parser import METRICS, parse_pasted_stats
 
 
 ROOT = Path(__file__).parent
-SELECTION_PREFIX = "Selekcja końcowa:"
 
 st.set_page_config(
     page_title="Ręczny analizator meczów",
@@ -41,33 +45,6 @@ def clear_manual_form() -> None:
     st.session_state["manual_pasted_stats"] = ""
 
 
-def meets_runtime_filters(
-    rec: dict,
-    score_range: tuple[int, int],
-    quality_range: tuple[int, int],
-) -> bool:
-    score = float(rec.get("score", 0))
-    quality = float(rec.get("data_quality", 0))
-    return (
-        score_range[0] <= score <= score_range[1]
-        and quality_range[0] <= quality <= quality_range[1]
-    )
-
-
-def is_raw_candidate(
-    rec: dict,
-    score_range: tuple[int, int],
-    quality_range: tuple[int, int],
-) -> bool:
-    selection_rejected = any(
-        str(reason).startswith(SELECTION_PREFIX)
-        for reason in rec.get("reasons", [])
-    )
-    return meets_runtime_filters(rec, score_range, quality_range) and (
-        bool(rec.get("passed")) or selection_rejected
-    )
-
-
 def result_rows(
     recommendations: list[dict],
     score_range: tuple[int, int],
@@ -83,7 +60,7 @@ def result_rows(
         quality = float(rec.get("data_quality", 0))
         filter_passed = meets_runtime_filters(rec, score_range, quality_range)
         selected = bool(rec.get("passed")) and filter_passed
-        raw_candidate = is_raw_candidate(rec, score_range, quality_range)
+        raw_candidate = was_candidate_before_selection(rec, score_range, quality_range)
 
         if not filter_passed:
             filter_reasons = []
@@ -105,6 +82,7 @@ def result_rows(
                 "Próg": rec.get("threshold"),
                 "Score": rec.get("score"),
                 "Jakość %": rec.get("data_quality"),
+                "Decyzja": decision_label(rec, score_range, quality_range),
                 "Spełnia aktualne zakresy": "TAK" if filter_passed else "NIE",
                 "Spełnił regułę przed selekcją": "TAK" if raw_candidate else "NIE",
                 "Wybrany końcowo": "TAK" if selected else "NIE",
@@ -123,8 +101,25 @@ def exact_score_frame(rows: list[dict]) -> pd.DataFrame:
         }
     )
     if not frame.empty:
+        frame["Udział modelu %"] = frame["Udział modelu %"].map(
+            lambda value: f"{float(value):.0f}%"
+        )
         frame.insert(0, "Miejsce", range(1, len(frame) + 1))
     return frame
+
+
+def compact_market_frame(rows: list[dict], with_rank: bool = False) -> pd.DataFrame:
+    frame = pd.DataFrame(rows).sort_values(
+        by=["Score", "Jakość %", "Wartość"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
+    if with_rank and not frame.empty:
+        frame.insert(0, "Miejsce", range(1, len(frame) + 1))
+    columns = ["Rynek", "Wartość", "Próg", "Score", "Jakość %", "Decyzja"]
+    if with_rank:
+        columns.insert(0, "Miejsce")
+    return frame[columns]
 
 
 base_config = load_config()
@@ -238,8 +233,13 @@ if analyze:
     recommendations = [rec.to_dict() for rec in analyze_match(match, config)]
     rows = result_rows(recommendations, score_range, quality_range)
     selected_rows = [row for row in rows if row["Wybrany końcowo"] == "TAK"]
-    raw_rows = [
-        row for row in rows if row["Spełnił regułę przed selekcją"] == "TAK"
+    remaining_candidates = [
+        row for row in rows
+        if row["Spełnił regułę przed selekcją"] == "TAK"
+        and row["Wybrany końcowo"] == "NIE"
+    ]
+    below_threshold_rows = [
+        row for row in rows if row["Spełnił regułę przed selekcją"] == "NIE"
     ]
     exact_scores = exact_score_diagnostics(parsed.stats)
 
@@ -250,22 +250,30 @@ if analyze:
         f"jakość {quality_min}–{quality_max}%"
     )
 
+    st.subheader("Końcowa selekcja")
     if selected_rows:
-        st.success(f"Końcowa selekcja: {len(selected_rows)} rynków")
-        selected_frame = pd.DataFrame(selected_rows).sort_values(
-            by=["Score", "Jakość %", "Wartość"],
-            ascending=[False, False, False], na_position="last",
-        )
-        selected_frame.insert(0, "Miejsce", range(1, len(selected_frame) + 1))
+        st.success(f"Wybrano {len(selected_rows)} rynków do końcowego TOP {max_recommendations}")
         st.dataframe(
-            selected_frame[[
-                "Miejsce", "Rynek", "Rule ID", "Wartość", "Próg",
-                "Score", "Jakość %", "Uzasadnienie",
-            ]],
-            use_container_width=True, hide_index=True,
+            compact_market_frame(selected_rows, with_rank=True),
+            use_container_width=True,
+            hide_index=True,
         )
     else:
         st.warning("Żaden rynek nie przetrwał pełnej selekcji i ustawionych zakresów.")
+
+    st.subheader("Pozostałe rynki, które przeszły progi")
+    st.caption(
+        "Te rynki spełniły własną regułę oraz filtry score i jakości, ale zostały "
+        "odrzucone podczas kontroli spójności, konkurencji kategorii albo limitu TOP."
+    )
+    if remaining_candidates:
+        st.dataframe(
+            compact_market_frame(remaining_candidates),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("Brak dodatkowych kandydatów odrzuconych dopiero podczas selekcji.")
 
     st.subheader("Diagnostyka dokładnego wyniku")
     st.caption(
@@ -277,13 +285,15 @@ if analyze:
         st.markdown("#### Dokładny wynik HT — TOP 3")
         st.dataframe(
             exact_score_frame(exact_scores["ht"]),
-            use_container_width=True, hide_index=True,
+            use_container_width=True,
+            hide_index=True,
         )
     with ft_col:
         st.markdown("#### Dokładny wynik FT — TOP 3")
         st.dataframe(
             exact_score_frame(exact_scores["ft"]),
-            use_container_width=True, hide_index=True,
+            use_container_width=True,
+            hide_index=True,
         )
 
     if exact_scores["ht"] and exact_scores["ft"]:
@@ -292,17 +302,15 @@ if analyze:
             f"HT {exact_scores['ht'][0]['score']} → FT {exact_scores['ft'][0]['score']}"
         )
 
-    st.subheader("Wszystkie rynki spełniające zakresy przed selekcją kategorii/TOP")
-    if raw_rows:
-        raw_frame = pd.DataFrame(raw_rows).sort_values(
-            by=["Score", "Jakość %", "Wartość"],
-            ascending=[False, False, False], na_position="last",
-        )
-        st.dataframe(raw_frame, use_container_width=True, hide_index=True)
-    else:
-        st.info(
-            "Brak rynków spełniających jednocześnie regułę oraz wybrane zakresy score i jakości."
-        )
+    with st.expander("Rynki poniżej progów lub poza zakresami"):
+        if below_threshold_rows:
+            st.dataframe(
+                compact_market_frame(below_threshold_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("Wszystkie aktywne rynki były kandydatami przed selekcją.")
 
     with st.expander("Pełne wyliczenia wszystkich aktywnych reguł"):
         all_frame = pd.DataFrame(rows).sort_values(
