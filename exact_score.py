@@ -74,9 +74,16 @@ def _ft_total_distribution(stats: dict[str, Any]) -> dict[int, float]:
         goals: _mean_metric(stats, f"Match total goals {goals}")
         for goals in range(5)
     }
-    four_plus = _mean_metric(stats, "Match total goals 4+", 100.0 - _mean_metric(stats, "Under 3.5 goals", 100.0))
-    exact[4] = max(exact[4], four_plus * 0.65)
-    exact[5] = max(0.0, four_plus - exact[4])
+
+    # Kanoniczne 4+ oznacza co najmniej cztery gole i wynika bezpośrednio
+    # z dopełnienia Under 3.5. Pole źródłowe „Match total goals 4+” jest
+    # pomijane, ponieważ część źródeł raportuje je niespójnie.
+    canonical_four_plus = _clamp(100.0 - _mean_metric(stats, "Under 3.5 goals", 100.0))
+    exact_four = min(exact[4], canonical_four_plus)
+    five_plus = max(0.0, canonical_four_plus - exact_four)
+
+    exact[4] = exact_four
+    exact[5] = five_plus
     return exact
 
 
