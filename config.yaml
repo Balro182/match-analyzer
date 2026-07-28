@@ -52,11 +52,11 @@ recommendations:
     - {id: over15ht, label: "Powyżej 1,5 gola w 1. połowie", enabled: true, mode: mean, conditions: [{metric: "Over 1.5 goals at half-time", operator: ">=", threshold_home: 47.5, threshold_away: 47.5}]}
     - {id: over25ht, label: "Powyżej 2,5 gola w 1. połowie", enabled: true, mode: mean, conditions: [{metric: "Over 2.5 goals at half-time", operator: ">=", threshold_home: 27.5, threshold_away: 27.5}]}
     - {id: win_win, label: "A/A — A prowadzi HT i wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Win FT", operator: ">=", threshold_home: 32.5, threshold_away: 32.5}]}
-    - {id: win_draw, label: "A/X — A prowadzi HT, remis FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Draw FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: win_lose, label: "A/B — A prowadzi HT, B wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Lose FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
+    - {id: win_draw, label: "A/X — A prowadzi HT, remis FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Draw FT", operator: ">=", threshold_home: 17.5, threshold_away: 17.5}]}
+    - {id: win_lose, label: "A/B — A prowadzi HT, B wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Win HT - Lose FT", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
     - {id: draw_win, label: "X/A — remis HT, A wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Win FT", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
     - {id: draw_draw, label: "X/X — remis HT i remis FT", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Draw FT", operator: ">=", threshold_home: 17.5, threshold_away: 17.5}]}
-    - {id: draw_lose, label: "X/B — remis HT, B wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Lose FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: lose_win, label: "B/A — B prowadzi HT, A wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Win FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: lose_draw, label: "B/X — B prowadzi HT, remis FT", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Draw FT", operator: ">=", threshold_home: 12.5, threshold_away: 12.5}]}
-    - {id: lose_lose, label: "B/B — B prowadzi HT i wygrywa FT", enabled: false, mode: mean, conditions: [{metric: "Lose HT - Lose FT", operator: ">=", threshold_home: 32.5, threshold_away: 32.5}]}
+    - {id: draw_lose, label: "X/B — remis HT, B wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Draw HT - Lose FT", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
+    - {id: lose_win, label: "B/A — B prowadzi HT, A wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Win FT", operator: ">=", threshold_home: 22.5, threshold_away: 22.5}]}
+    - {id: lose_draw, label: "B/X — B prowadzi HT, remis FT", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Draw FT", operator: ">=", threshold_home: 17.5, threshold_away: 17.5}]}
+    - {id: lose_lose, label: "B/B — B prowadzi HT i wygrywa FT", enabled: true, mode: mean, conditions: [{metric: "Lose HT - Lose FT", operator: ">=", threshold_home: 32.5, threshold_away: 32.5}]}
