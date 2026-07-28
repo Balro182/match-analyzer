@@ -45,6 +45,15 @@ def clear_manual_form() -> None:
     st.session_state["manual_pasted_stats"] = ""
 
 
+def selection_level(reasons: list[str]) -> str:
+    text = " | ".join(reasons).casefold()
+    if "poziom selekcji: główny typ" in text:
+        return "Główny typ"
+    if "poziom selekcji: dodatkowy sygnał" in text:
+        return "Dodatkowy sygnał"
+    return "—"
+
+
 def result_rows(
     recommendations: list[dict],
     score_range: tuple[int, int],
@@ -82,6 +91,7 @@ def result_rows(
                 "Próg": rec.get("threshold"),
                 "Score": rec.get("score"),
                 "Jakość %": rec.get("data_quality"),
+                "Poziom": selection_level(reasons),
                 "Decyzja": decision_label(rec, score_range, quality_range),
                 "Spełnia aktualne zakresy": "TAK" if filter_passed else "NIE",
                 "Spełnił regułę przed selekcją": "TAK" if raw_candidate else "NIE",
@@ -126,8 +136,14 @@ base_config = load_config()
 base_recommendations = base_config.get("recommendations", {})
 default_score = int(base_recommendations.get("min_score", 100))
 default_quality = int(base_recommendations.get("min_data_quality", 100))
+selection_config = base_recommendations.get("selection", {})
+max_main_recommendations = int(selection_config.get("max_main_recommendations", 3))
+max_additional_signals = int(selection_config.get("max_additional_signals", 2))
 max_recommendations = int(
-    base_recommendations.get("selection", {}).get("max_recommendations", 5)
+    selection_config.get(
+        "max_recommendations",
+        max_main_recommendations + max_additional_signals,
+    )
 )
 
 st.title("📋 Ręczny analizator statystyk meczu")
@@ -154,7 +170,12 @@ recommendation_config = config.get("recommendations", {})
 
 st.caption(
     f"Algorytm {ALGORITHM_VERSION} · score {score_min}–{score_max} · "
-    f"jakość {quality_min}–{quality_max}% · maksymalnie TOP {max_recommendations}"
+    f"jakość {quality_min}–{quality_max}% · maks. {max_main_recommendations} główne "
+    f"+ {max_additional_signals} dodatkowe"
+)
+st.caption(
+    "Lista nie jest zapełniana na siłę. Selekcja premiuje odporne rynki i ogranicza "
+    "powtarzanie tego samego scenariusza między kategoriami."
 )
 st.caption(
     "Ustawienia zakresów obowiązują wyłącznie w bieżącej analizie i nie zmieniają config.yaml."
@@ -233,6 +254,8 @@ if analyze:
     recommendations = [rec.to_dict() for rec in analyze_match(match, config)]
     rows = result_rows(recommendations, score_range, quality_range)
     selected_rows = [row for row in rows if row["Wybrany końcowo"] == "TAK"]
+    main_rows = [row for row in selected_rows if row["Poziom"] == "Główny typ"]
+    additional_rows = [row for row in selected_rows if row["Poziom"] == "Dodatkowy sygnał"]
     remaining_candidates = [
         row for row in rows
         if row["Spełnił regułę przed selekcją"] == "TAK"
@@ -250,21 +273,36 @@ if analyze:
         f"jakość {quality_min}–{quality_max}%"
     )
 
-    st.subheader("Końcowa selekcja")
-    if selected_rows:
-        st.success(f"Wybrano {len(selected_rows)} rynków do końcowego TOP {max_recommendations}")
+    st.subheader("Główne typy")
+    if main_rows:
+        st.success(
+            f"Wybrano {len(main_rows)} z maksymalnie {max_main_recommendations} głównych typów"
+        )
         st.dataframe(
-            compact_market_frame(selected_rows, with_rank=True),
+            compact_market_frame(main_rows, with_rank=True),
             use_container_width=True,
             hide_index=True,
         )
     else:
-        st.warning("Żaden rynek nie przetrwał pełnej selekcji i ustawionych zakresów.")
+        st.warning("Brak rynku wystarczająco mocnego i niezależnego, aby uznać go za główny typ.")
+
+    st.subheader("Dodatkowe sygnały")
+    st.caption(
+        "Są słabsze albo bardziej skorelowane niż główna lista. Nie są dobierane na siłę."
+    )
+    if additional_rows:
+        st.dataframe(
+            compact_market_frame(additional_rows, with_rank=True),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("Brak dodatkowych sygnałów spełniających minimalny selection score.")
 
     st.subheader("Pozostałe rynki, które przeszły progi")
     st.caption(
         "Te rynki spełniły własną regułę oraz filtry score i jakości, ale zostały "
-        "odrzucone podczas kontroli spójności, konkurencji kategorii albo limitu TOP."
+        "odrzucone podczas kontroli spójności, konkurencji kategorii lub niezależności."
     )
     if remaining_candidates:
         st.dataframe(
@@ -273,12 +311,12 @@ if analyze:
             hide_index=True,
         )
     else:
-        st.info("Brak dodatkowych kandydatów odrzuconych dopiero podczas selekcji.")
+        st.info("Brak innych kandydatów odrzuconych dopiero podczas selekcji.")
 
     st.subheader("Diagnostyka dokładnego wyniku")
     st.caption(
         "Udział modelu to znormalizowany ranking TOP 3, a nie skalibrowane "
-        "prawdopodobieństwo bukmacherskie. Te wyniki nie wchodzą do oficjalnego TOP 5."
+        "prawdopodobieństwo bukmacherskie. Te wyniki nie wchodzą do oficjalnej selekcji."
     )
     ht_col, ft_col = st.columns(2)
     with ht_col:
