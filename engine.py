@@ -106,14 +106,31 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     missing = [name for name, value in values.items() if value is None]
     threshold = float(condition.get("threshold_home", condition.get("threshold", 55)))
     if missing:
-        return Recommendation(rule["id"], rule["label"], False, 0.0, None, threshold, "special", ["Brak danych: " + ", ".join(missing)], 0.0)
+        return Recommendation(
+            rule_id=rule["id"],
+            label=rule["label"],
+            score=0.0,
+            passed=False,
+            reasons=["Brak danych: " + ", ".join(missing)],
+            data_quality=0.0,
+            raw_value=None,
+            threshold=threshold,
+            mode="special",
+        )
 
-    btts_home, btts_away = values["Both Teams to Score"]
-    scored_home, scored_away = values["Team scored"]
-    under_home, under_away = values["Under 2.5 goals"]
-    goals_home, goals_away = values["Goals scored per game"]
-    conceded_home, conceded_away = values["Goals conceded per game"]
-    clean_home, clean_away = values["Clean sheets"]
+    btts = values["Both Teams to Score"]
+    scored = values["Team scored"]
+    under = values["Under 2.5 goals"]
+    goals = values["Goals scored per game"]
+    conceded = values["Goals conceded per game"]
+    clean = values["Clean sheets"]
+
+    btts_home, btts_away = float(btts["home"]), float(btts["away"])
+    scored_home, scored_away = float(scored["home"]), float(scored["away"])
+    under_home, under_away = float(under["home"]), float(under["away"])
+    goals_home, goals_away = float(goals["home"]), float(goals["away"])
+    conceded_home, conceded_away = float(conceded["home"]), float(conceded["away"])
+    clean_home, clean_away = float(clean["home"]), float(clean["away"])
 
     btts_mean = (btts_home + btts_away) / 2
     btts_min = min(btts_home, btts_away)
@@ -180,7 +197,17 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     ]
     score = round(sum(scores) / len(scores), 1)
     reasons = [("TAK: " if ok else "NIE: ") + text for ok, text in checks]
-    return Recommendation(rule["id"], rule["label"], passed, score, round(btts_mean, 2), threshold, "special", reasons, 100.0)
+    return Recommendation(
+        rule_id=rule["id"],
+        label=rule["label"],
+        score=score,
+        passed=passed,
+        reasons=reasons,
+        data_quality=100.0,
+        raw_value=round(btts_mean, 2),
+        threshold=threshold,
+        mode="special",
+    )
 
 
 def _goal_data_quality(stats: dict[str, dict[str, float]], config: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -194,10 +221,10 @@ def _goal_data_quality(stats: dict[str, dict[str, float]], config: dict[str, Any
     maximum_gap = float(cfg.get("maximum_4plus_gap", 20))
     reasons = []
     conflict = False
-    for side, index in (("A", 0), ("B", 1)):
-        reported = float(total4plus[index])
-        exact4 = float(total4[index])
-        derived = 100.0 - float(under35[index])
+    for side, key in (("A", "home"), ("B", "away")):
+        reported = float(total4plus[key])
+        exact4 = float(total4[key])
+        derived = 100.0 - float(under35[key])
         gap = abs(reported - derived)
         if gap > maximum_gap:
             conflict = True
