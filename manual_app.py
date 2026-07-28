@@ -8,6 +8,7 @@ import streamlit as st
 import yaml
 
 from engine import ALGORITHM_VERSION, analyze_match
+from exact_score import exact_score_diagnostics
 from manual_parser import METRICS, parse_pasted_stats
 
 
@@ -27,7 +28,6 @@ def load_config() -> dict:
 
 
 def runtime_config(base: dict, minimum_score: int, minimum_quality: int) -> dict:
-    """Apply lower bounds inside the engine without changing config.yaml."""
     result = copy.deepcopy(base)
     recommendations = result.setdefault("recommendations", {})
     recommendations["min_score"] = int(minimum_score)
@@ -48,9 +48,10 @@ def meets_runtime_filters(
 ) -> bool:
     score = float(rec.get("score", 0))
     quality = float(rec.get("data_quality", 0))
-    score_min, score_max = score_range
-    quality_min, quality_max = quality_range
-    return score_min <= score <= score_max and quality_min <= quality <= quality_max
+    return (
+        score_range[0] <= score <= score_range[1]
+        and quality_range[0] <= quality <= quality_range[1]
+    )
 
 
 def is_raw_candidate(
@@ -113,6 +114,19 @@ def result_rows(
     return rows
 
 
+def exact_score_frame(rows: list[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows).rename(
+        columns={
+            "score": "Dokładny wynik",
+            "model_share": "Udział modelu %",
+            "raw_score": "Wskaźnik zgodności",
+        }
+    )
+    if not frame.empty:
+        frame.insert(0, "Miejsce", range(1, len(frame) + 1))
+    return frame
+
+
 base_config = load_config()
 base_recommendations = base_config.get("recommendations", {})
 default_score = int(base_recommendations.get("min_score", 100))
@@ -123,28 +137,19 @@ max_recommendations = int(
 
 st.title("📋 Ręczny analizator statystyk meczu")
 st.info(
-    "Wklej cały blok statystyk w takim samym układzie jak z football-stats: "
-    "wartość gospodarza, nazwa metryki, wartość gościa. Program używa tego samego "
-    "engine.py i config.yaml co główna aplikacja."
+    "Wklej cały blok statystyk w takim samym układzie jak z football-stats. "
+    "Program używa tego samego engine.py i config.yaml co główna aplikacja."
 )
 
 st.subheader("Zakresy końcowej selekcji")
 score_col, quality_col = st.columns(2)
 score_range = score_col.slider(
-    "Zakres score",
-    min_value=0,
-    max_value=150,
-    value=(default_score, 150),
-    step=1,
-    help="Przesuń oba uchwyty, np. ustaw 120–134. Przejdą tylko rynki ze score wewnątrz zakresu.",
+    "Zakres score", min_value=0, max_value=150,
+    value=(default_score, 150), step=1,
 )
 quality_range = quality_col.slider(
-    "Zakres jakości danych %",
-    min_value=0,
-    max_value=100,
-    value=(default_quality, 100),
-    step=1,
-    help="Przejdą tylko rynki z jakością danych wewnątrz wybranego zakresu.",
+    "Zakres jakości danych %", min_value=0, max_value=100,
+    value=(default_quality, 100), step=1,
 )
 
 score_min, score_max = score_range
@@ -157,44 +162,32 @@ st.caption(
     f"jakość {quality_min}–{quality_max}% · maksymalnie TOP {max_recommendations}"
 )
 st.caption(
-    "Ustawienia zakresów obowiązują wyłącznie w bieżącej analizie i nie zmieniają pliku config.yaml."
+    "Ustawienia zakresów obowiązują wyłącznie w bieżącej analizie i nie zmieniają config.yaml."
 )
 
 name_col_a, name_col_b = st.columns(2)
 home_team = name_col_a.text_input(
-    "Gospodarz",
-    placeholder="np. Raków Częstochowa",
-    key="manual_home_team",
+    "Gospodarz", placeholder="np. Raków Częstochowa", key="manual_home_team"
 )
 away_team = name_col_b.text_input(
-    "Gość",
-    placeholder="np. Valletta FC",
-    key="manual_away_team",
+    "Gość", placeholder="np. Valletta FC", key="manual_away_team"
 )
 
 pasted = st.text_area(
     "Dane meczu",
     height=430,
     placeholder=(
-        "Main Stats\n"
-        "Gospodarz\nLast 10 games home\nGość\nLast 10 games away\n"
+        "Main Stats\nGospodarz\nLast 10 games home\nGość\nLast 10 games away\n"
         "2.10    Goals scored per game    0.80\n"
-        "1.00    Goals conceded per game    1.10\n"
-        "..."
+        "1.00    Goals conceded per game    1.10\n..."
     ),
     key="manual_pasted_stats",
 )
 
 analyze_col, clear_col = st.columns([3, 1])
-analyze = analyze_col.button(
-    "🔎 Analizuj",
-    type="primary",
-    use_container_width=True,
-)
+analyze = analyze_col.button("🔎 Analizuj", type="primary", use_container_width=True)
 clear_col.button(
-    "🧹 Wyczyść",
-    use_container_width=True,
-    on_click=clear_manual_form,
+    "🧹 Wyczyść", use_container_width=True, on_click=clear_manual_form,
     help="Usuwa nazwy drużyn, wklejone statystyki i wynik poprzedniej analizy.",
 )
 
@@ -204,7 +197,6 @@ if analyze:
         st.stop()
 
     parsed = parse_pasted_stats(pasted)
-
     if not parsed.stats:
         st.error("Nie rozpoznano żadnych wierszy statystycznych.")
         st.stop()
@@ -249,6 +241,7 @@ if analyze:
     raw_rows = [
         row for row in rows if row["Spełnił regułę przed selekcją"] == "TAK"
     ]
+    exact_scores = exact_score_diagnostics(parsed.stats)
 
     st.divider()
     st.subheader(f"{match['home_team']} – {match['away_team']}")
@@ -261,35 +254,49 @@ if analyze:
         st.success(f"Końcowa selekcja: {len(selected_rows)} rynków")
         selected_frame = pd.DataFrame(selected_rows).sort_values(
             by=["Score", "Jakość %", "Wartość"],
-            ascending=[False, False, False],
-            na_position="last",
+            ascending=[False, False, False], na_position="last",
         )
         selected_frame.insert(0, "Miejsce", range(1, len(selected_frame) + 1))
         st.dataframe(
-            selected_frame[
-                [
-                    "Miejsce",
-                    "Rynek",
-                    "Rule ID",
-                    "Wartość",
-                    "Próg",
-                    "Score",
-                    "Jakość %",
-                    "Uzasadnienie",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
+            selected_frame[[
+                "Miejsce", "Rynek", "Rule ID", "Wartość", "Próg",
+                "Score", "Jakość %", "Uzasadnienie",
+            ]],
+            use_container_width=True, hide_index=True,
         )
     else:
         st.warning("Żaden rynek nie przetrwał pełnej selekcji i ustawionych zakresów.")
+
+    st.subheader("Diagnostyka dokładnego wyniku")
+    st.caption(
+        "Udział modelu to znormalizowany ranking TOP 3, a nie skalibrowane "
+        "prawdopodobieństwo bukmacherskie. Te wyniki nie wchodzą do oficjalnego TOP 5."
+    )
+    ht_col, ft_col = st.columns(2)
+    with ht_col:
+        st.markdown("#### Dokładny wynik HT — TOP 3")
+        st.dataframe(
+            exact_score_frame(exact_scores["ht"]),
+            use_container_width=True, hide_index=True,
+        )
+    with ft_col:
+        st.markdown("#### Dokładny wynik FT — TOP 3")
+        st.dataframe(
+            exact_score_frame(exact_scores["ft"]),
+            use_container_width=True, hide_index=True,
+        )
+
+    if exact_scores["ht"] and exact_scores["ft"]:
+        st.info(
+            "Główny scenariusz diagnostyczny: "
+            f"HT {exact_scores['ht'][0]['score']} → FT {exact_scores['ft'][0]['score']}"
+        )
 
     st.subheader("Wszystkie rynki spełniające zakresy przed selekcją kategorii/TOP")
     if raw_rows:
         raw_frame = pd.DataFrame(raw_rows).sort_values(
             by=["Score", "Jakość %", "Wartość"],
-            ascending=[False, False, False],
-            na_position="last",
+            ascending=[False, False, False], na_position="last",
         )
         st.dataframe(raw_frame, use_container_width=True, hide_index=True)
     else:
@@ -298,29 +305,18 @@ if analyze:
         )
 
     with st.expander("Pełne wyliczenia wszystkich aktywnych reguł"):
-        st.caption(
-            "Ta tabela celowo pokazuje również rynki odrzucone. Kolumna „Spełnia aktualne zakresy” "
-            "wskazuje, czy rynek mieści się w obu wybranych przedziałach."
-        )
         all_frame = pd.DataFrame(rows).sort_values(
             by=["Wybrany końcowo", "Spełnia aktualne zakresy", "Score"],
-            ascending=[False, False, False],
-            na_position="last",
+            ascending=[False, False, False], na_position="last",
         )
         st.dataframe(all_frame, use_container_width=True, hide_index=True)
 
     with st.expander("Rozpoznane dane wejściowe"):
         input_rows = [
-            {
-                "Metryka": metric,
-                "Gospodarz": values["home"],
-                "Gość": values["away"],
-            }
+            {"Metryka": metric, "Gospodarz": values["home"], "Gość": values["away"]}
             for metric, values in parsed.stats.items()
         ]
-        st.dataframe(
-            pd.DataFrame(input_rows), use_container_width=True, hide_index=True
-        )
+        st.dataframe(pd.DataFrame(input_rows), use_container_width=True, hide_index=True)
 
     if parsed.ignored_lines:
         with st.expander("Pominięte nagłówki i nierozpoznane wiersze"):
