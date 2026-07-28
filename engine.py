@@ -11,17 +11,12 @@ METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
 
-EXACT_TOTAL_RULE_IDS = {"total0", "total1", "total2", "total3", "total4", "total01", "total23", "total4plus"}
-TOTAL_QUALITY_RULE_IDS = {"over25", "over35", "under25", "under35"}
-OVER_QUALITY_RULE_IDS = {"over25", "over35"}
 HTFT_RULE_IDS = {
     "win_win", "win_draw", "win_lose",
     "draw_win", "draw_draw", "draw_lose",
     "lose_win", "lose_draw", "lose_lose",
 }
 
-# Perspektywa meczu A–B. Druga metryka jest komplementarnym przebiegiem
-# z perspektywy drużyny gości, a nie tą samą etykietą co dla gospodarza.
 HTFT_DIRECTIONAL_PAIRS = {
     "win_win": ("Win HT - Win FT", "Lose HT - Lose FT", "A/A"),
     "win_draw": ("Win HT - Draw FT", "Lose HT - Draw FT", "A/X"),
@@ -45,6 +40,59 @@ def _conceding_support(value: float) -> float:
     if value <= 1.6:
         return 80.0
     return 100.0
+
+
+def _canonicalize_goal_totals(
+    stats: dict[str, dict[str, float]],
+) -> tuple[dict[str, dict[str, float]], list[str]]:
+    """Use 100 - Under 3.5 as the canonical definition of 4+ goals.
+
+    The source field named ``Match total goals 4+`` is retained only for
+    diagnostics because some providers report it inconsistently. Exact four
+    goals is capped at canonical 4+, preserving the required set relation.
+    """
+    normalized = {
+        name: dict(values) if isinstance(values, dict) else values
+        for name, values in stats.items()
+    }
+    under35 = core._find_metric(stats, "Under 3.5 goals")
+    if under35 is None:
+        return normalized, []
+
+    source_four_plus = core._find_metric(stats, "Match total goals 4+")
+    exact_four = core._find_metric(stats, "Match total goals 4")
+    canonical = {
+        "home": max(0.0, min(100.0, 100.0 - float(under35["home"]))),
+        "away": max(0.0, min(100.0, 100.0 - float(under35["away"]))),
+    }
+    warnings: list[str] = []
+
+    if source_four_plus is not None:
+        for side, key in (("A", "home"), ("B", "away")):
+            reported = float(source_four_plus[key])
+            derived = canonical[key]
+            if abs(reported - derived) > 0.01:
+                warnings.append(
+                    f"{side}: źródłowe 4+ {reported:.1f}% zastąpiono "
+                    f"wartością 100-Under3.5 = {derived:.1f}%"
+                )
+
+    normalized["Match total goals 4+"] = canonical
+
+    if exact_four is not None:
+        capped = {
+            "home": min(float(exact_four["home"]), canonical["home"]),
+            "away": min(float(exact_four["away"]), canonical["away"]),
+        }
+        for side, key in (("A", "home"), ("B", "away")):
+            if float(exact_four[key]) > canonical[key]:
+                warnings.append(
+                    f"{side}: dokładnie 4 gole {float(exact_four[key]):.1f}% "
+                    f"ograniczono do kanonicznego 4+ {canonical[key]:.1f}%"
+                )
+        normalized["Match total goals 4"] = capped
+
+    return normalized, warnings
 
 
 def _evaluate_htft(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
@@ -81,7 +129,7 @@ def _evaluate_htft(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     passed = core.OPS[op_text](value, threshold)
     score = round(core._strength(value, threshold, op_text), 1)
     reasons = [
-        f"Kierunkowe HT/FT {formula_label}: ",
+        f"Kierunkowe HT/FT {formula_label}",
         f"profil A {home_metric_name} = {home_value:.1f}%",
         f"profil B {away_metric_name} = {away_value:.1f}%",
         f"średnia ({home_value:.1f} + {away_value:.1f}) / 2 = {value:.1f}%; próg {threshold:g}%; score {score:.1f}",
@@ -107,15 +155,9 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     threshold = float(condition.get("threshold_home", condition.get("threshold", 55)))
     if missing:
         return Recommendation(
-            rule_id=rule["id"],
-            label=rule["label"],
-            score=0.0,
-            passed=False,
-            reasons=["Brak danych: " + ", ".join(missing)],
-            data_quality=0.0,
-            raw_value=None,
-            threshold=threshold,
-            mode="special",
+            rule_id=rule["id"], label=rule["label"], score=0.0, passed=False,
+            reasons=["Brak danych: " + ", ".join(missing)], data_quality=0.0,
+            raw_value=None, threshold=threshold, mode="special",
         )
 
     btts = values["Both Teams to Score"]
@@ -198,68 +240,35 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     score = round(sum(scores) / len(scores), 1)
     reasons = [("TAK: " if ok else "NIE: ") + text for ok, text in checks]
     return Recommendation(
-        rule_id=rule["id"],
-        label=rule["label"],
-        score=score,
-        passed=passed,
-        reasons=reasons,
-        data_quality=100.0,
-        raw_value=round(btts_mean, 2),
-        threshold=threshold,
-        mode="special",
+        rule_id=rule["id"], label=rule["label"], score=score, passed=passed,
+        reasons=reasons, data_quality=100.0, raw_value=round(btts_mean, 2),
+        threshold=threshold, mode="special",
     )
 
 
-def _goal_data_quality(stats: dict[str, dict[str, float]], config: dict[str, Any]) -> tuple[bool, list[str]]:
-    total4plus = core._find_metric(stats, "Match total goals 4+")
-    total4 = core._find_metric(stats, "Match total goals 4")
-    under35 = core._find_metric(stats, "Under 3.5 goals")
-    if total4plus is None or total4 is None or under35 is None:
-        return False, ["Brak pełnych danych do kontroli sum goli"]
-
-    cfg = config.get("recommendations", {}).get("goal_data_consistency", {})
-    maximum_gap = float(cfg.get("maximum_4plus_gap", 20))
-    reasons = []
-    conflict = False
-    for side, key in (("A", "home"), ("B", "away")):
-        reported = float(total4plus[key])
-        exact4 = float(total4[key])
-        derived = 100.0 - float(under35[key])
-        gap = abs(reported - derived)
-        if gap > maximum_gap:
-            conflict = True
-            reasons.append(f"{side}: 4+ {reported:.1f}% vs 100-Under3.5 {derived:.1f}% (różnica {gap:.1f} pp)")
-        if exact4 > reported:
-            conflict = True
-            reasons.append(f"{side}: dokładnie 4 gole {exact4:.1f}% > zgłoszone 4+ {reported:.1f}%")
-    return conflict, reasons
-
-
 def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recommendation]:
-    stats = match.get("stats", {})
+    source_stats = match.get("stats", {})
+    stats, goal_total_warnings = _canonicalize_goal_totals(source_stats)
     recommendations = []
     for rule in config["recommendations"].get("rules", []):
         if not rule.get("enabled", True):
             continue
         rule_id = str(rule.get("id") or "")
         if rule_id == "btts":
-            recommendations.append(_evaluate_btts(stats, rule))
+            rec = _evaluate_btts(stats, rule)
         elif rule_id in HTFT_RULE_IDS:
-            recommendations.append(_evaluate_htft(stats, rule))
+            rec = _evaluate_htft(stats, rule)
         else:
-            recommendations.append(core.evaluate_rule(stats, rule))
+            rec = core.evaluate_rule(stats, rule)
 
-    conflict, conflict_reasons = _goal_data_quality(stats, config)
-    if conflict:
-        cap = float(config.get("recommendations", {}).get("goal_data_consistency", {}).get("over_quality_cap", 80))
-        adjusted = []
-        for rec in recommendations:
-            if rec.rule_id in EXACT_TOTAL_RULE_IDS:
-                adjusted.append(replace(rec, passed=False, data_quality=0.0, reasons=[*rec.reasons, "Konflikt danych sum goli: " + " | ".join(conflict_reasons)]))
-            elif rec.rule_id in TOTAL_QUALITY_RULE_IDS:
-                adjusted.append(replace(rec, data_quality=min(float(rec.data_quality), cap), reasons=[*rec.reasons, "Obniżona jakość danych sum goli: " + " | ".join(conflict_reasons)]))
-            else:
-                adjusted.append(rec)
-        recommendations = adjusted
+        if goal_total_warnings and rule_id in {"total4", "total4plus"}:
+            rec = replace(
+                rec,
+                reasons=[
+                    *rec.reasons,
+                    "Normalizacja sum goli: " + " | ".join(goal_total_warnings),
+                ],
+            )
+        recommendations.append(rec)
 
     return apply_final_selection(recommendations, config)
