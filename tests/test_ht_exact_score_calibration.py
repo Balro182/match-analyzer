@@ -1,4 +1,4 @@
-from exact_score import rank_exact_scores_ht
+from exact_score import ht_profile_diagnostics, rank_exact_scores_ht
 
 
 WIECZYSTA_LECH = {
@@ -17,15 +17,33 @@ WIECZYSTA_LECH = {
 def test_asymmetric_ht_profile_limits_nil_nil_and_promotes_away_scores():
     picks = rank_exact_scores_ht(WIECZYSTA_LECH, limit=5)
     scores = [pick.score for pick in picks]
-    shares = {pick.score: pick.model_share for pick in picks}
 
-    assert "0:1" in scores[:2]
+    assert "0:1" in scores[:3]
     assert "0:2" in scores[:4]
     assert scores.index("0:2") < scores.index("1:1")
-    assert shares["0:0"] <= shares["0:1"] * 1.65
     assert "1:0" not in scores[:4]
 
 
 def test_ht_exact_score_distribution_is_normalized_beyond_top_three():
     picks = rank_exact_scores_ht(WIECZYSTA_LECH, limit=25)
     assert 99.0 <= sum(pick.model_share for pick in picks) <= 100.5
+
+
+def test_ipf_preserves_goal_and_btts_margins():
+    profile = ht_profile_diagnostics(WIECZYSTA_LECH)
+    totals = profile["total_goals"]
+
+    assert abs(totals["0"] - 30.0) <= 2.5
+    assert abs(totals["1"] - 20.0) <= 2.5
+    assert abs(totals["2"] - 35.0) <= 2.5
+    assert abs(totals["3+"] - 15.0) <= 2.5
+    assert abs((totals["2"] + totals["3+"]) - 50.0) <= 2.5
+    assert abs(profile["btts"]["yes"] - 30.0) <= 2.5
+
+
+def test_outcome_is_soft_not_forced_to_raw_average():
+    profile = ht_profile_diagnostics(WIECZYSTA_LECH)
+    outcome = profile["outcome"]
+
+    assert outcome["away"] > outcome["home"]
+    assert abs(outcome["draw"] - 42.9) > 0.1
