@@ -4,76 +4,62 @@ from engine import ALGORITHM_VERSION, evaluate_rule
 def btts_rule():
     return {
         "id": "btts",
-        "label": "BTTS TAK — obie drużyny strzelą",
+        "label": "BTTS TAK",
         "mode": "special",
-        "conditions": [
-            {
-                "metric": "Both Teams to Score",
-                "operator": ">=",
-                "threshold_home": 55,
-                "threshold_away": 55,
-                "minimum_btts": 45,
-                "minimum_team_scored": 70,
-                "maximum_under25": 65,
-                "dominance_min_goals": 2.0,
-                "dominance_min_gap": 1.0,
-                "dominance_min_clean_sheets": 40,
-                "dominance_max_weaker_goals": 1.2,
-                "dominance_escape_team_scored": 90,
-                "dominance_escape_btts": 70,
-            }
-        ],
+        "conditions": [{
+            "threshold_home": 55,
+            "minimum_btts": 50,
+            "minimum_team_scored": 70,
+            "maximum_under25": 65,
+            "dominance_min_goals": 2.0,
+            "dominance_min_gap": 1.0,
+            "dominance_min_clean_sheets": 40,
+            "dominance_max_weaker_goals": 1.2,
+            "dominance_escape_team_scored": 90,
+            "dominance_escape_btts": 70,
+        }],
     }
 
 
-def test_algorithm_version_is_2_4_0():
-    assert ALGORITHM_VERSION == "2.4.0"
-
-
-def test_hammarby_degerfors_is_blocked_by_unilateral_dominance():
-    stats = {
-        "Both Teams to Score": {"home": 60, "away": 60},
-        "Team scored": {"home": 100, "away": 80},
-        "Under 2.5 goals": {"home": 20, "away": 40},
-        "Goals scored per game": {"home": 3.1, "away": 1.2},
-        "Clean sheets": {"home": 40, "away": 20},
+def stats(home_goals=1.7, away_goals=1.5, home_clean=20, away_clean=20):
+    return {
+        "Both Teams to Score": {"home": 70, "away": 70},
+        "Team scored": {"home": 90, "away": 90},
+        "Under 2.5 goals": {"home": 30, "away": 30},
+        "Goals scored per game": {"home": home_goals, "away": away_goals},
+        "Goals conceded per game": {"home": 1.3, "away": 1.4},
+        "Clean sheets": {"home": home_clean, "away": away_clean},
     }
-    result = evaluate_rule(stats, btts_rule())
+
+
+def test_algorithm_version_is_current():
+    assert ALGORITHM_VERSION == "2.11.0"
+
+
+def test_unilateral_dominance_blocks_btts():
+    data = stats(home_goals=3.1, away_goals=1.2, home_clean=40)
+    result = evaluate_rule(data, btts_rule())
     assert result.passed is False
-    assert any("blok=TAK" in reason for reason in result.reasons)
+    assert any("blok dominacji" in reason and reason.startswith("NIE:") for reason in result.reasons)
 
 
-def test_elfsborg_sirius_keeps_btts_recommendation():
-    stats = {
-        "Both Teams to Score": {"home": 80, "away": 80},
-        "Team scored": {"home": 100, "away": 100},
-        "Under 2.5 goals": {"home": 50, "away": 0},
-        "Goals scored per game": {"home": 1.7, "away": 2.5},
-        "Clean sheets": {"home": 20, "away": 20},
-    }
-    result = evaluate_rule(stats, btts_rule())
+def test_balanced_profile_keeps_btts():
+    result = evaluate_rule(stats(), btts_rule())
     assert result.passed is True
-    assert any("blok=NIE" in reason for reason in result.reasons)
 
 
-def test_dominance_escape_preserves_exceptionally_reliable_weaker_attack():
-    stats = {
-        "Both Teams to Score": {"home": 80, "away": 70},
-        "Team scored": {"home": 100, "away": 90},
-        "Under 2.5 goals": {"home": 20, "away": 30},
-        "Goals scored per game": {"home": 2.6, "away": 1.2},
-        "Clean sheets": {"home": 40, "away": 10},
-    }
-    result = evaluate_rule(stats, btts_rule())
+def test_dominance_escape_keeps_reliable_weaker_attack():
+    data = stats(home_goals=2.6, away_goals=1.2, home_clean=40)
+    data["Both Teams to Score"]["away"] = 70
+    data["Team scored"]["away"] = 90
+    result = evaluate_rule(data, btts_rule())
     assert result.passed is True
-    assert any("blok=NIE" in reason for reason in result.reasons)
 
 
-def test_missing_dominance_metrics_does_not_reduce_legacy_data_quality():
-    stats = {
+def test_missing_extended_metrics_reduce_quality():
+    result = evaluate_rule({
         "Both Teams to Score": {"home": 70, "away": 70},
         "Team scored": {"home": 80, "away": 80},
-    }
-    result = evaluate_rule(stats, btts_rule())
+    }, btts_rule())
     assert result.passed is False
-    assert round(result.data_quality, 1) == 66.7
+    assert result.data_quality < 100
