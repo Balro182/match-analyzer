@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import os
 from pathlib import Path
 from typing import Any, Iterable
@@ -57,8 +59,33 @@ def export_csv(path: str | Path = sqlite_store.DEFAULT_DB_PATH, **kwargs: Any) -
 
 
 def import_history_csv(content: bytes, path: str | Path = sqlite_store.DEFAULT_DB_PATH) -> dict[str, int]:
-    return _module().import_history_csv(content, path)
+    rows = list(csv.DictReader(io.StringIO(content.decode("utf-8-sig"))))
+    imported = skipped = 0
+    for row in rows:
+        if not all((row.get("home_team"), row.get("away_team"), row.get("rule_id"), row.get("algorithm_version"))):
+            skipped += 1
+            continue
+        level = row.get("selected_level") or "additional"
+        reason = "Poziom selekcji: główny typ" if level == "main" else "Poziom selekcji: dodatkowy sygnał"
+        rec = {
+            "rule_id": row["rule_id"], "label": row.get("label") or row["rule_id"], "passed": True,
+            "raw_value": float(row["raw_value"]) if row.get("raw_value") else None,
+            "threshold": float(row["threshold_value"]) if row.get("threshold_value") else None,
+            "score": float(row.get("score") or 0), "data_quality": float(row.get("data_quality") or 0),
+            "mode": "historical_import", "reasons": [reason, "Źródło: manual_history"],
+        }
+        try:
+            save_analysis(
+                {"home_team": row["home_team"], "away_team": row["away_team"], "stats": {}},
+                [rec], row["algorithm_version"], analyzed_at=row.get("analyzed_at") or None, path=path,
+                match_date=row.get("match_date") or "", source="manual_history",
+                series_name=row.get("series_name") or "historical", duplicate_policy="error",
+            )
+            imported += 1
+        except ValueError:
+            skipped += 1
+    return {"imported": imported, "skipped": skipped}
 
 
 DEFAULT_DB_PATH = sqlite_store.DEFAULT_DB_PATH
-DuplicateAnalysisError = sqlite_store.DuplicateAnalysisError
+DuplicateAnalysisError = ValueError
