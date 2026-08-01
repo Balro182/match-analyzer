@@ -58,7 +58,6 @@ def _target_total_buckets(stats) -> dict[str, float]:
 
 def _dominant_total_bucket(stats) -> str:
     targets = _target_total_buckets(stats)
-    # Deterministic tie-break: prefer the lower goal count.
     order = ("0", "1", "2", "3+")
     return max(order, key=lambda key: (targets[key], -order.index(key)))
 
@@ -84,7 +83,6 @@ def _soft_outcome_targets(matrix: dict[str, float], stats) -> dict[str, float]:
         key: sum(value for score, value in matrix.items() if _score_outcome(score) == key)
         for key in observed
     }
-    # A/X/B remains a soft constraint: 35% observed history, 65% Poisson base.
     blended = {key: 0.65 * base[key] + 0.35 * observed[key] for key in observed}
     total = sum(blended.values()) or 1.0
     return {key: value / total for key, value in blended.items()}
@@ -109,8 +107,6 @@ def rank_exact_scores_ht(stats, limit: int = 3):
     matrix = _ipf_ht_matrix(stats)
     dominant_bucket = _dominant_total_bucket(stats)
     selected = [(score, value) for score, value in matrix.items() if _total_bucket(score) == dominant_bucket]
-    # model_share is conditional on the selected goal-count class; raw_score
-    # remains the unconditional probability in the complete HT matrix.
     return _impl._normalize_top(selected, limit)
 
 
@@ -138,9 +134,127 @@ def ht_profile_diagnostics(stats) -> dict[str, dict[str, float] | dict[str, str 
     }
 
 
+def _ft_total_targets(stats) -> dict[int, float]:
+    totals = _ft_total_distribution(stats)
+    return {goals: max(0.0, totals.get(goals, 0.0)) / 100.0 for goals in range(6)}
+
+
+def _dominant_ft_total(stats) -> int:
+    targets = _ft_total_targets(stats)
+    return max(range(6), key=lambda goals: (targets[goals], -goals))
+
+
+def _valid_score_path(ht_score: str, ft_score: str) -> bool:
+    ht_home, ht_away = _score_tuple(ht_score)
+    ft_home, ft_away = _score_tuple(ft_score)
+    return _impl.is_valid_score_progression(ht_home, ht_away, ft_home, ft_away)
+
+
+def _ft_path_support(ft_score: str, stats) -> float:
+    ht_matrix = _ipf_ht_matrix(stats)
+    ht_bucket = _dominant_total_bucket(stats)
+    return sum(
+        probability
+        for ht_score, probability in ht_matrix.items()
+        if _total_bucket(ht_score) == ht_bucket and _valid_score_path(ht_score, ft_score)
+    )
+
+
+def _ft_market_alignment(score: str, stats) -> float:
+    home_goals, away_goals = _score_tuple(score)
+    outcome_home, outcome_draw, outcome_away = _impl._ft_outcomes(stats)
+    outcome_fit = {
+        "home": outcome_home,
+        "draw": outcome_draw,
+        "away": outcome_away,
+    }[_score_outcome(score)] / 100.0
+
+    btts_yes = _impl._clamp(_impl._mean_metric(stats, "Both Teams to Score")) / 100.0
+    btts_fit = btts_yes if home_goals > 0 and away_goals > 0 else 1.0 - btts_yes
+
+    scored = _impl._metric(stats, "Goals scored per game") or (1.0, 1.0)
+    conceded = _impl._metric(stats, "Goals conceded per game") or (1.0, 1.0)
+    expected_home = (scored[0] + conceded[1]) / 2.0
+    expected_away = (scored[1] + conceded[0]) / 2.0
+    distance = abs(home_goals - expected_home) + abs(away_goals - expected_away)
+    allocation_fit = 1.0 / (1.0 + distance)
+
+    twice = _impl._metric(stats, "Team scored twice")
+    team_over_fit = 0.5
+    if twice is not None:
+        home_twice, away_twice = (_impl._clamp(value) / 100.0 for value in twice)
+        home_fit = home_twice if home_goals >= 2 else 1.0 - home_twice
+        away_fit = away_twice if away_goals >= 2 else 1.0 - away_twice
+        team_over_fit = (home_fit + away_fit) / 2.0
+
+    return 0.35 * outcome_fit + 0.30 * btts_fit + 0.20 * allocation_fit + 0.15 * team_over_fit
+
+
+def _normalize_ft_selection(
+    ranked: list[tuple[str, float, float]],
+    limit: int,
+) -> list[ExactScorePick]:
+    ordered = sorted(ranked, key=lambda item: (item[1], item[0]), reverse=True)
+    total = sum(max(0.0, rank_value) for _, rank_value, _ in ordered)
+    if total <= 0:
+        return []
+    return [
+        ExactScorePick(
+            score=score,
+            model_share=round(max(0.0, rank_value) / total * 100.0, 1),
+            raw_score=round(max(0.0, raw_probability) * 100.0, 2),
+        )
+        for score, rank_value, raw_probability in ordered[:limit]
+    ]
+
+
+def rank_exact_scores_ft(stats, limit: int = 3):
+    base_picks = _impl.rank_exact_scores_ft(stats, limit=21)
+    base_matrix = _normalize_matrix({pick.score: pick.model_share / 100.0 for pick in base_picks})
+    dominant_total = _dominant_ft_total(stats)
+    candidates = {
+        score: probability
+        for score, probability in base_matrix.items()
+        if sum(_score_tuple(score)) == dominant_total
+    }
+
+    path_support = {score: _ft_path_support(score, stats) for score in candidates}
+    compatible = {score: value for score, value in candidates.items() if path_support[score] > 1e-12}
+    if compatible:
+        candidates = compatible
+
+    max_path = max((path_support[score] for score in candidates), default=1.0) or 1.0
+    ranked = []
+    for score, raw_probability in candidates.items():
+        path_fit = path_support[score] / max_path
+        market_fit = _ft_market_alignment(score, stats)
+        rank_value = raw_probability * (0.30 + 0.70 * path_fit) * (0.45 + 0.55 * market_fit)
+        ranked.append((score, rank_value, raw_probability))
+
+    return _normalize_ft_selection(ranked, limit)
+
+
+def ft_profile_diagnostics(stats) -> dict[str, object]:
+    dominant_total = _dominant_ft_total(stats)
+    targets = _ft_total_targets(stats)
+    ht_bucket = _dominant_total_bucket(stats)
+    return {
+        "total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()},
+        "selection": {
+            "goal_total": dominant_total,
+            "total_share": round(targets[dominant_total] * 100.0, 1),
+            "ht_goal_bucket": ht_bucket,
+            "requires_valid_ht_ft_progression": True,
+            "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"],
+            "model_share_scope": "conditional_within_ft_total_and_valid_ht_paths",
+        },
+    }
+
+
 def exact_score_diagnostics(stats, limit: int = 3):
     return {
         "ht": [pick.to_dict() for pick in rank_exact_scores_ht(stats, limit)],
         "ft": [pick.to_dict() for pick in rank_exact_scores_ft(stats, limit)],
         "ht_profile": ht_profile_diagnostics(stats),
+        "ft_profile": ft_profile_diagnostics(stats),
     }
