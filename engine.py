@@ -6,10 +6,13 @@ from typing import Any
 import engine_core as core
 from selection import apply_final_selection
 
-ALGORITHM_VERSION = "2.10.0"
+ALGORITHM_VERSION = "2.11.0"
 METRIC_LABELS = core.METRIC_LABELS
 Recommendation = core.Recommendation
 metric_label = core.metric_label
+
+# Public compatibility API used by the historical test suite and external callers.
+evaluate_rule = core.evaluate_rule
 
 HTFT_RULE_IDS = {
     "win_win", "win_draw", "win_lose",
@@ -45,12 +48,7 @@ def _conceding_support(value: float) -> float:
 def _canonicalize_goal_totals(
     stats: dict[str, dict[str, float]],
 ) -> tuple[dict[str, dict[str, float]], list[str]]:
-    """Use 100 - Under 3.5 as the canonical definition of 4+ goals.
-
-    The source field named ``Match total goals 4+`` is retained only for
-    diagnostics because some providers report it inconsistently. Exact four
-    goals is capped at canonical 4+, preserving the required set relation.
-    """
+    """Use 100 - Under 3.5 as the canonical definition of 4+ goals."""
     normalized = {
         name: dict(values) if isinstance(values, dict) else values
         for name, values in stats.items()
@@ -149,7 +147,10 @@ def _evaluate_htft(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
 
 def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
     condition = (rule.get("conditions") or [{}])[0]
-    names = ["Both Teams to Score", "Team scored", "Under 2.5 goals", "Goals scored per game", "Goals conceded per game", "Clean sheets"]
+    names = [
+        "Both Teams to Score", "Team scored", "Under 2.5 goals",
+        "Goals scored per game", "Goals conceded per game", "Clean sheets",
+    ]
     values = {name: core._find_metric(stats, name) for name in names}
     missing = [name for name, value in values.items() if value is None]
     threshold = float(condition.get("threshold_home", condition.get("threshold", 55)))
@@ -166,6 +167,7 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     goals = values["Goals scored per game"]
     conceded = values["Goals conceded per game"]
     clean = values["Clean sheets"]
+    assert btts and scored and under and goals and conceded and clean
 
     btts_home, btts_away = float(btts["home"]), float(btts["away"])
     scored_home, scored_away = float(scored["home"]), float(scored["away"])
@@ -246,6 +248,108 @@ def _evaluate_btts(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> 
     )
 
 
+def _evaluate_btts_no(stats: dict[str, dict[str, float]], rule: dict[str, Any]) -> Recommendation:
+    """Independent BTTS NO rule; never inferred merely from BTTS YES failing."""
+    condition = (rule.get("conditions") or [{}])[0]
+    names = [
+        "Both Teams to Score", "Team scored", "Under 2.5 goals",
+        "Goals scored per game", "Goals conceded per game", "Clean sheets",
+    ]
+    values = {name: core._find_metric(stats, name) for name in names}
+    missing = [name for name, value in values.items() if value is None]
+    maximum_btts = float(condition.get("maximum_btts", 40))
+    if missing:
+        return Recommendation(
+            rule_id=rule["id"], label=rule["label"], score=0.0, passed=False,
+            reasons=["Brak danych: " + ", ".join(missing)], data_quality=0.0,
+            raw_value=None, threshold=maximum_btts, mode="special",
+        )
+
+    btts = values["Both Teams to Score"]
+    scored = values["Team scored"]
+    under = values["Under 2.5 goals"]
+    goals = values["Goals scored per game"]
+    conceded = values["Goals conceded per game"]
+    clean = values["Clean sheets"]
+    assert btts and scored and under and goals and conceded and clean
+
+    btts_mean = (float(btts["home"]) + float(btts["away"])) / 2
+    under_mean = (float(under["home"]) + float(under["away"])) / 2
+    maximum_team_scored = float(condition.get("maximum_weak_team_scored", 50))
+    maximum_weak_goals = float(condition.get("maximum_weak_goals", 0.9))
+    minimum_opponent_clean = float(condition.get("minimum_opponent_clean_sheets", 35))
+    maximum_opponent_conceded = float(condition.get("maximum_opponent_conceded", 1.1))
+    minimum_under25 = float(condition.get("minimum_under25", 60))
+
+    home_weak = (
+        float(scored["home"]) <= maximum_team_scored
+        and float(goals["home"]) <= maximum_weak_goals
+        and float(clean["away"]) >= minimum_opponent_clean
+        and float(conceded["away"]) <= maximum_opponent_conceded
+    )
+    away_weak = (
+        float(scored["away"]) <= maximum_team_scored
+        and float(goals["away"]) <= maximum_weak_goals
+        and float(clean["home"]) >= minimum_opponent_clean
+        and float(conceded["home"]) <= maximum_opponent_conceded
+    )
+    weak_attack_confirmed = home_weak or away_weak
+
+    checks = [
+        (btts_mean <= maximum_btts, f"Średnia BTTS {btts_mean:.1f}% ≤ {maximum_btts:g}%"),
+        (weak_attack_confirmed, "Potwierdzona słaba ofensywa jednej strony i defensywa rywala"),
+        (under_mean >= minimum_under25, f"Średni Under 2.5 {under_mean:.1f}% ≥ {minimum_under25:g}%"),
+    ]
+    passed = all(ok for ok, _ in checks)
+    score = round(sum([
+        core._strength(btts_mean, maximum_btts, "<="),
+        120.0 if weak_attack_confirmed else 0.0,
+        core._strength(under_mean, minimum_under25, ">="),
+    ]) / 3, 1)
+    reasons = [("TAK: " if ok else "NIE: ") + text for ok, text in checks]
+    if home_weak:
+        reasons.append("Słaba ofensywa A jest blokowana przez defensywę B")
+    if away_weak:
+        reasons.append("Słaba ofensywa B jest blokowana przez defensywę A")
+    return Recommendation(
+        rule_id=rule["id"], label=rule["label"], score=score, passed=passed,
+        reasons=reasons, data_quality=100.0, raw_value=round(100.0 - btts_mean, 2),
+        threshold=100.0 - maximum_btts, mode="special",
+    )
+
+
+def selection_telemetry(recommendations: list[Recommendation]) -> list[dict[str, Any]]:
+    """Return machine-readable diagnostics for every evaluated recommendation."""
+    rows: list[dict[str, Any]] = []
+    for rec in recommendations:
+        level = "rejected"
+        for reason in rec.reasons:
+            if "Poziom selekcji: główny typ" in reason:
+                level = "main"
+                break
+            if "Poziom selekcji: dodatkowy sygnał" in reason:
+                level = "additional"
+                break
+        threshold_margin = None
+        if rec.raw_value is not None and rec.threshold is not None:
+            threshold_margin = round(float(rec.raw_value) - float(rec.threshold), 2)
+        rows.append({
+            "algorithm_version": ALGORITHM_VERSION,
+            "rule_id": rec.rule_id,
+            "label": rec.label,
+            "selected_level": level,
+            "passed": bool(rec.passed),
+            "raw_value": rec.raw_value,
+            "threshold": rec.threshold,
+            "threshold_margin": threshold_margin,
+            "score": rec.score,
+            "data_quality": rec.data_quality,
+            "mode": rec.mode,
+            "reasons": list(rec.reasons),
+        })
+    return rows
+
+
 def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recommendation]:
     source_stats = match.get("stats", {})
     stats, goal_total_warnings = _canonicalize_goal_totals(source_stats)
@@ -256,6 +360,8 @@ def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recomme
         rule_id = str(rule.get("id") or "")
         if rule_id == "btts":
             rec = _evaluate_btts(stats, rule)
+        elif rule_id == "btts_no":
+            rec = _evaluate_btts_no(stats, rule)
         elif rule_id in HTFT_RULE_IDS:
             rec = _evaluate_htft(stats, rule)
         else:
@@ -272,3 +378,12 @@ def analyze_match(match: dict[str, Any], config: dict[str, Any]) -> list[Recomme
         recommendations.append(rec)
 
     return apply_final_selection(recommendations, config)
+
+
+def analyze_match_report(match: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    recommendations = analyze_match(match, config)
+    return {
+        "algorithm_version": ALGORITHM_VERSION,
+        "recommendations": recommendations,
+        "telemetry": selection_telemetry(recommendations),
+    }
