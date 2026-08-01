@@ -3,6 +3,8 @@ from __future__ import annotations
 import backtest_store_legacy as legacy
 from backtest_store_legacy import *
 
+_legacy_hit = legacy._hit
+
 
 def _hit(rule_id: str, ht: Scoreline, ft: Scoreline) -> bool | None:
     if ft.home < ht.home or ft.away < ht.away:
@@ -16,7 +18,7 @@ def _hit(rule_id: str, ht: Scoreline, ft: Scoreline) -> bool | None:
         return ht.home > 0 and ft.home > ht.home
     if rule_id == "away_score_both_halves":
         return ht.away > 0 and ft.away > ht.away
-    return legacy._hit(rule_id, ht, ft)
+    return _legacy_hit(rule_id, ht, ft)
 
 
 # Legacy settlement resolves _hit from its own module globals. Rebind it so both
