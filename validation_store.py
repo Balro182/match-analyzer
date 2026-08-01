@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
-import backtest_store as sqlite_store
+import sqlite_validation_store as sqlite_store
 
 
 def _supabase_enabled() -> bool:
@@ -57,12 +57,8 @@ def export_csv(path: str | Path = sqlite_store.DEFAULT_DB_PATH, **kwargs: Any) -
 
 
 def import_history_csv(content: bytes, path: str | Path = sqlite_store.DEFAULT_DB_PATH) -> dict[str, int]:
-    module = _module()
-    importer = getattr(module, "import_history_csv", None)
-    if importer is None:
-        raise RuntimeError("Import historyczny nie jest dostępny dla wybranego backendu")
-    return importer(content, path)
+    return _module().import_history_csv(content, path)
 
 
 DEFAULT_DB_PATH = sqlite_store.DEFAULT_DB_PATH
-DuplicateAnalysisError = getattr(sqlite_store, "DuplicateAnalysisError", ValueError)
+DuplicateAnalysisError = sqlite_store.DuplicateAnalysisError
