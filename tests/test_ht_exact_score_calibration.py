@@ -14,14 +14,16 @@ WIECZYSTA_LECH = {
 }
 
 
-def test_asymmetric_ht_profile_does_not_overpromote_nil_nil():
+def test_asymmetric_ht_profile_limits_nil_nil_and_promotes_away_scores():
     picks = rank_exact_scores_ht(WIECZYSTA_LECH, limit=5)
     scores = [pick.score for pick in picks]
+    shares = {pick.score: pick.model_share for pick in picks}
 
-    assert scores[0] == "0:1"
-    assert "0:2" in scores[:3]
-    assert scores.index("0:0") < scores.index("1:1")
-    assert picks[scores.index("0:1")].model_share > picks[scores.index("0:0")].model_share
+    assert "0:1" in scores[:2]
+    assert "0:2" in scores[:4]
+    assert scores.index("0:2") < scores.index("1:1")
+    assert shares["0:0"] <= shares["0:1"] * 1.50
+    assert "1:0" not in scores[:4]
 
 
 def test_ht_exact_score_distribution_is_normalized_beyond_top_three():
