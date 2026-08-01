@@ -16,7 +16,6 @@ def config(max_recommendations: int = 5) -> dict:
                 "max_recommendations": max_recommendations,
                 "max_main_recommendations": 3,
                 "max_additional_signals": 2,
-                "max_per_category": 1,
                 "main_min_adjusted_score": 0,
                 "additional_min_adjusted_score": 0,
                 "minimum_half_outcome_lead": 0,
@@ -46,11 +45,11 @@ def test_only_strongest_mutually_exclusive_outcome_survives() -> None:
     assert result["away_win"].passed is False
 
 
-def test_correlated_goal_markets_are_reduced_to_one() -> None:
+def test_separate_compatible_goal_markets_can_survive_together() -> None:
     result = by_id(apply_final_selection([rec("over15", 120), rec("over25", 104), rec("under35", 103)], config()))
     assert result["over15"].passed is True
-    assert result["over25"].passed is False
-    assert result["under35"].passed is False
+    assert result["over25"].passed is True
+    assert result["under35"].passed is True
 
 
 def test_shortlist_never_exceeds_five_and_keeps_compatible_subset() -> None:
