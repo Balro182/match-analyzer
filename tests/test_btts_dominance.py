@@ -33,7 +33,7 @@ def stats(home_goals=1.7, away_goals=1.5, home_clean=20, away_clean=20):
 
 
 def test_algorithm_version_is_current():
-    assert ALGORITHM_VERSION == "2.11.0"
+    assert ALGORITHM_VERSION == "2.12.0"
 
 
 def test_unilateral_dominance_blocks_btts():
