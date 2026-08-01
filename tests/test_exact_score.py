@@ -27,11 +27,33 @@ STATS = {
 }
 
 
+TURKU_MARIEHAMN = {
+    "Goals scored per game": {"home": 1.8, "away": 1.1},
+    "Goals conceded per game": {"home": 0.9, "away": 2.0},
+    "Team win first half": {"home": 40, "away": 10},
+    "Team draw at half time": {"home": 30, "away": 30},
+    "Team lost first half": {"home": 30, "away": 60},
+    "BTTS in first-half": {"home": 20, "away": 0},
+    "Over 0.5 goals at half-time": {"home": 70, "away": 70},
+    "Over 1.5 goals at half-time": {"home": 30, "away": 30},
+    "Over 2.5 goals at half-time": {"home": 30, "away": 10},
+}
+
+
 def test_ht_ranking_prefers_away_one_goal_profile():
     picks = rank_exact_scores_ht(STATS)
     assert len(picks) == 3
     assert picks[0].score == "0:1"
     assert 0 < sum(pick.model_share for pick in picks) < 100
+
+
+def test_ht_ranking_does_not_promote_opposite_direction_for_clear_home_leader():
+    picks = rank_exact_scores_ht(TURKU_MARIEHAMN)
+    scores = [pick.score for pick in picks]
+    assert scores[0] == "1:0"
+    assert "0:1" not in scores
+    assert "3:0" not in scores
+    assert "2:0" in scores
 
 
 def test_ft_ranking_prefers_one_one_profile():
