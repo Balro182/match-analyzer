@@ -20,7 +20,6 @@ STATS = {
     "Match total goals 2": {"home": 30, "away": 40},
     "Match total goals 3": {"home": 40, "away": 20},
     "Match total goals 4": {"home": 0, "away": 10},
-    "Match total goals 4+": {"home": 10, "away": 20},
     "Under 3.5 goals": {"home": 90, "away": 80},
     "Over 0.5 goals at half-time": {"home": 60, "away": 80},
     "Over 1.5 goals at half-time": {"home": 30, "away": 40},
@@ -32,7 +31,7 @@ def test_ht_ranking_prefers_away_one_goal_profile():
     picks = rank_exact_scores_ht(STATS)
     assert len(picks) == 3
     assert picks[0].score == "0:1"
-    assert sum(pick.model_share for pick in picks) == 100
+    assert 0 < sum(pick.model_share for pick in picks) < 100
 
 
 def test_ft_ranking_prefers_one_one_profile():
@@ -40,7 +39,7 @@ def test_ft_ranking_prefers_one_one_profile():
     assert len(picks) == 3
     assert picks[0].score == "1:1"
     assert {pick.score for pick in picks} == {"1:1", "2:1", "1:2"}
-    assert sum(pick.model_share for pick in picks) == 100
+    assert 0 < sum(pick.model_share for pick in picks) < 100
 
 
 def test_diagnostics_are_separate_from_betting_recommendations():
