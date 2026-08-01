@@ -38,6 +38,8 @@ def test_algorithm_version_is_current():
 
 def test_unilateral_dominance_blocks_btts():
     data = stats(home_goals=3.1, away_goals=1.2, home_clean=40)
+    data["Both Teams to Score"]["away"] = 60
+    data["Team scored"]["away"] = 80
     result = evaluate_rule(data, btts_rule())
     assert result.passed is False
     assert any("blok dominacji" in reason and reason.startswith("NIE:") for reason in result.reasons)
