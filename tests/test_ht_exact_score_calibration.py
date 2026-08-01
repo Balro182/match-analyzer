@@ -14,19 +14,23 @@ WIECZYSTA_LECH = {
 }
 
 
-def test_asymmetric_ht_profile_limits_nil_nil_and_promotes_away_scores():
+def test_dominant_two_goal_class_excludes_other_goal_counts():
     picks = rank_exact_scores_ht(WIECZYSTA_LECH, limit=5)
     scores = [pick.score for pick in picks]
 
-    assert "0:1" in scores[:3]
-    assert "0:2" in scores[:4]
-    assert scores.index("0:2") < scores.index("1:1")
-    assert "1:0" not in scores[:4]
+    assert scores == ["0:2", "1:1", "2:0"]
+    assert all(sum(int(value) for value in score.split(":")) == 2 for score in scores)
+    assert "0:0" not in scores
+    assert "0:1" not in scores
 
 
-def test_ht_exact_score_distribution_is_normalized_beyond_top_three():
-    picks = rank_exact_scores_ht(WIECZYSTA_LECH, limit=25)
-    assert 99.0 <= sum(pick.model_share for pick in picks) <= 100.5
+def test_selected_class_shares_are_conditional_and_raw_scores_are_absolute():
+    picks = rank_exact_scores_ht(WIECZYSTA_LECH, limit=5)
+
+    assert 99.9 <= sum(pick.model_share for pick in picks) <= 100.1
+    assert 32.5 <= sum(pick.raw_score for pick in picks) <= 37.5
+    assert picks[0].score == "0:2"
+    assert picks[0].model_share > 50.0
 
 
 def test_ipf_preserves_goal_and_btts_margins():
@@ -39,6 +43,14 @@ def test_ipf_preserves_goal_and_btts_margins():
     assert abs(totals["3+"] - 15.0) <= 2.5
     assert abs((totals["2"] + totals["3+"]) - 50.0) <= 2.5
     assert abs(profile["btts"]["yes"] - 30.0) <= 2.5
+
+
+def test_profile_reports_selected_goal_class_and_scope():
+    profile = ht_profile_diagnostics(WIECZYSTA_LECH)
+
+    assert profile["selection"]["goal_bucket"] == "2"
+    assert abs(profile["selection"]["bucket_share"] - 35.0) <= 2.5
+    assert profile["selection"]["model_share_scope"] == "conditional_within_goal_bucket"
 
 
 def test_outcome_is_soft_not_forced_to_raw_average():
