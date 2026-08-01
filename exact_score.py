@@ -54,9 +54,15 @@ def _outcome_fit(home_goals: int, away_goals: int, home: float, draw: float, awa
     return home if home_goals > away_goals else draw if home_goals == away_goals else away
 
 
-def _team_goal_fit(home_goals: int, away_goals: int, expected_home: float, expected_away: float) -> float:
+def _team_goal_fit(
+    home_goals: int,
+    away_goals: int,
+    expected_home: float,
+    expected_away: float,
+    decay: float = 0.85,
+) -> float:
     distance = abs(home_goals - expected_home) + abs(away_goals - expected_away)
-    return 100.0 * exp(-0.85 * distance)
+    return 100.0 * exp(-decay * distance)
 
 
 def _ft_total_distribution(stats: dict[str, Any]) -> dict[int, float]:
@@ -93,12 +99,62 @@ def _ht_outcomes(stats: dict[str, Any]) -> tuple[float, float, float]:
     return (33.3,33.4,33.3) if total <= 0 else (home/total*100, draw_value/total*100, away/total*100)
 
 
+def _ht_direction_factor(
+    home_goals: int,
+    away_goals: int,
+    home_outcome: float,
+    draw_outcome: float,
+    away_outcome: float,
+    minimum_lead: float = 7.5,
+) -> float:
+    outcomes = {"home": home_outcome, "draw": draw_outcome, "away": away_outcome}
+    ordered = sorted(outcomes.items(), key=lambda item: item[1], reverse=True)
+    leader, leader_value = ordered[0]
+    second_value = ordered[1][1]
+    if leader_value - second_value < minimum_lead:
+        return 1.0
+
+    candidate = "home" if home_goals > away_goals else "draw" if home_goals == away_goals else "away"
+    if candidate == leader or candidate == "draw":
+        return 1.0
+    return max(0.35, outcomes[candidate] / max(leader_value, 0.0001))
+
+
+def _ht_btts_fit(
+    home_goals: int,
+    away_goals: int,
+    btts_ht: float,
+    expected_home: float,
+    expected_away: float,
+) -> float:
+    if home_goals > 0 and away_goals > 0:
+        return btts_ht
+
+    no_btts = 100.0 - btts_ht
+    if home_goals == 0 and away_goals == 0:
+        return no_btts
+
+    expected_total = expected_home + expected_away
+    if expected_total <= 0:
+        return no_btts / 2
+    scoring_share = expected_home / expected_total if home_goals > 0 else expected_away / expected_total
+    return no_btts * scoring_share
+
+
+def _ht_extreme_total_factor(total_goals: int) -> float:
+    if total_goals <= 2:
+        return 1.0
+    return 0.70
+
+
 def rank_exact_scores_ht(stats: dict[str, Any], limit: int = 3) -> list[ExactScorePick]:
     totals = _ht_total_distribution(stats)
     home_outcome, draw_outcome, away_outcome = _ht_outcomes(stats)
     btts_ht = _mean_metric(stats, "BTTS in first-half")
     goals_scored = _metric(stats, "Goals scored per game") or (1.0,1.0)
-    expected_home, expected_away = min(1.5, goals_scored[0]*0.45), min(1.5, goals_scored[1]*0.45)
+    goals_conceded = _metric(stats, "Goals conceded per game") or (1.0,1.0)
+    expected_home = min(1.5, ((goals_scored[0] + goals_conceded[1]) / 2) * 0.45)
+    expected_away = min(1.5, ((goals_scored[1] + goals_conceded[0]) / 2) * 0.45)
     candidates=[]
     for hg in range(4):
         for ag in range(4):
@@ -108,9 +164,11 @@ def rank_exact_scores_ht(stats: dict[str, Any], limit: int = 3) -> list[ExactSco
             raw=(
                 0.40*totals.get(total,0)
                 +0.35*_outcome_fit(hg,ag,home_outcome,draw_outcome,away_outcome)
-                +0.15*(btts_ht if hg and ag else 100-btts_ht)
-                +0.10*_team_goal_fit(hg,ag,expected_home,expected_away)
+                +0.15*_ht_btts_fit(hg,ag,btts_ht,expected_home,expected_away)
+                +0.10*_team_goal_fit(hg,ag,expected_home,expected_away,decay=1.05)
             )
+            raw *= _ht_direction_factor(hg,ag,home_outcome,draw_outcome,away_outcome)
+            raw *= _ht_extreme_total_factor(total)
             candidates.append((f"{hg}:{ag}",raw))
     return _normalize_top(candidates,limit)
 
