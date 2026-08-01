@@ -68,5 +68,6 @@ def test_ft_ranking_prefers_one_one_profile():
 
 def test_diagnostics_are_separate_from_betting_recommendations():
     result = exact_score_diagnostics(STATS)
-    assert set(result) == {"ht", "ft"}
+    assert set(result) == {"ht", "ft", "ht_profile"}
     assert all("model_share" in row for row in result["ht"] + result["ft"])
+    assert set(result["ht_profile"]) == {"total_goals", "btts", "outcome"}
