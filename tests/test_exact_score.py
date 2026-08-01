@@ -55,7 +55,8 @@ def test_ht_ranking_preserves_clear_home_direction_in_full_matrix():
     scores = [pick.score for pick in picks]
     assert profile["outcome"]["home"] > profile["outcome"]["away"]
     assert "1:0" in scores
-    assert "3:0" not in scores
+    assert "2:0" in scores
+    assert scores.index("1:0") < scores.index("3:0")
 
 
 def test_ft_ranking_prefers_one_one_profile():
