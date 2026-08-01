@@ -28,7 +28,7 @@ def match() -> dict:
 
 def test_save_analysis_persists_match_and_telemetry(tmp_path: Path):
     db = tmp_path / "backtest.db"
-    match_id = save_analysis(match(), [rec("home_win", "main")], "2.12.0", "1:0", "2:0", path=db)
+    match_id = save_analysis(match(), [rec("home_win", "main")], "2.11.0", "1:0", "2:0", path=db)
 
     matches = list_matches(db)
     rows = recommendation_rows(db)
@@ -46,7 +46,7 @@ def test_settle_match_grades_supported_markets_and_profit(tmp_path: Path):
         rec("home_win", "main"), rec("under35", "main"), rec("goal_both_halves", "main"),
         rec("total3", "additional"), rec("btts_no", "additional"), rec("win_win", "additional"),
     ]
-    match_id = save_analysis(match(), recommendations, "2.12.0", path=db)
+    match_id = save_analysis(match(), recommendations, "2.11.0", path=db)
 
     result = settle_match(
         match_id, "2:0", "3:0",
@@ -63,18 +63,18 @@ def test_settle_match_grades_supported_markets_and_profit(tmp_path: Path):
 
 def test_settlement_rejects_impossible_progression(tmp_path: Path):
     db = tmp_path / "backtest.db"
-    match_id = save_analysis(match(), [rec("home_win", "main")], "2.12.0", path=db)
+    match_id = save_analysis(match(), [rec("home_win", "main")], "2.11.0", path=db)
     with pytest.raises(ValueError, match="progresja"):
         settle_match(match_id, "0:1", "2:0", path=db)
 
 
 def test_dashboard_groups_levels_scores_margins_and_roi(tmp_path: Path):
     db = tmp_path / "backtest.db"
-    first = save_analysis(match(), [rec("home_win", "main", 80, 70)], "2.12.0", path=db)
+    first = save_analysis(match(), [rec("home_win", "main", 80, 70)], "2.11.0", path=db)
     second = save_analysis(
         {"home_team": "C", "away_team": "D", "stats": {}},
         [rec("away_win", "additional", 71, 70)],
-        "2.12.0",
+        "2.11.0",
         analyzed_at="2026-08-02T12:00:00+00:00",
         path=db,
     )
@@ -89,13 +89,13 @@ def test_dashboard_groups_levels_scores_margins_and_roi(tmp_path: Path):
     assert dashboard["overall"]["roi"] == 0.0
     assert dashboard["by_level"]["main"]["hit_rate"] == 100.0
     assert dashboard["by_level"]["additional"]["hit_rate"] == 0.0
-    assert "10+ pp" in dashboard["by_margin"]
+    assert "5–10 pp" in dashboard["by_margin"]
     assert "0–2,5 pp" in dashboard["by_margin"]
 
 
 def test_csv_export_contains_header_and_selected_rows(tmp_path: Path):
     db = tmp_path / "backtest.db"
-    save_analysis(match(), [rec("home_win", "main")], "2.12.0", path=db)
+    save_analysis(match(), [rec("home_win", "main")], "2.11.0", path=db)
     content = export_csv(db, selected_only=True).decode("utf-8-sig")
     assert "match_id" in content
     assert "home_win" in content
