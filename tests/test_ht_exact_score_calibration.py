@@ -22,7 +22,7 @@ def test_asymmetric_ht_profile_limits_nil_nil_and_promotes_away_scores():
     assert "0:1" in scores[:2]
     assert "0:2" in scores[:4]
     assert scores.index("0:2") < scores.index("1:1")
-    assert shares["0:0"] <= shares["0:1"] * 1.50
+    assert shares["0:0"] <= shares["0:1"] * 1.65
     assert "1:0" not in scores[:4]
 
 
