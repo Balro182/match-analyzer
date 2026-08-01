@@ -22,9 +22,7 @@ def config(**selection_overrides):
         "max_recommendations": 5,
         "max_main_recommendations": 3,
         "max_additional_signals": 2,
-        "max_per_category": 1,
         "minimum_half_outcome_lead": 0,
-        "independence_penalty_per_shared_tag": 0.12,
         "main_min_adjusted_score": 0,
         "additional_min_adjusted_score": 0,
     }
@@ -73,7 +71,7 @@ def test_selection_does_not_fill_slots_below_adjusted_minimum():
     assert not any(item.passed for item in result)
 
 
-def test_independent_market_beats_correlated_market_with_similar_score():
+def test_separate_directional_markets_can_both_be_selected_when_strongest():
     items = [
         rec("home_win", 135),
         rec("home_win_ht", 134, raw_value=70),
@@ -87,9 +85,7 @@ def test_independent_market_beats_correlated_market_with_similar_score():
     )
     selected_ids = {item.rule_id for item in result if item.passed}
 
-    assert "home_win" in selected_ids
-    assert "goal_both_halves" in selected_ids
-    assert "home_win_ht" not in selected_ids
+    assert selected_ids == {"home_win", "home_win_ht"}
 
 
 def test_exact_total_is_less_robust_than_broad_goal_market():
