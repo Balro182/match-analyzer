@@ -56,6 +56,13 @@ def _target_total_buckets(stats) -> dict[str, float]:
     }
 
 
+def _dominant_total_bucket(stats) -> str:
+    targets = _target_total_buckets(stats)
+    # Deterministic tie-break: prefer the lower goal count.
+    order = ("0", "1", "2", "3+")
+    return max(order, key=lambda key: (targets[key], -order.index(key)))
+
+
 def _target_btts(stats) -> dict[str, float]:
     yes = _impl._clamp(_impl._mean_metric(stats, "BTTS in first-half")) / 100.0
     return {"yes": yes, "no": 1.0 - yes}
@@ -100,10 +107,14 @@ def _ipf_ht_matrix(stats, iterations: int = 60) -> dict[str, float]:
 
 def rank_exact_scores_ht(stats, limit: int = 3):
     matrix = _ipf_ht_matrix(stats)
-    return _impl._normalize_top(list(matrix.items()), limit)
+    dominant_bucket = _dominant_total_bucket(stats)
+    selected = [(score, value) for score, value in matrix.items() if _total_bucket(score) == dominant_bucket]
+    # model_share is conditional on the selected goal-count class; raw_score
+    # remains the unconditional probability in the complete HT matrix.
+    return _impl._normalize_top(selected, limit)
 
 
-def ht_profile_diagnostics(stats) -> dict[str, dict[str, float]]:
+def ht_profile_diagnostics(stats) -> dict[str, dict[str, float] | dict[str, str | float]]:
     matrix = _ipf_ht_matrix(stats)
     totals = {
         key: round(sum(value for score, value in matrix.items() if _total_bucket(score) == key) * 100.0, 1)
@@ -114,10 +125,16 @@ def ht_profile_diagnostics(stats) -> dict[str, dict[str, float]]:
         for key in ("home", "draw", "away")
     }
     btts_yes = round(sum(value for score, value in matrix.items() if _btts_class(score) == "yes") * 100.0, 1)
+    selected_bucket = _dominant_total_bucket(stats)
     return {
         "total_goals": totals,
         "btts": {"yes": btts_yes, "no": round(100.0 - btts_yes, 1)},
         "outcome": outcomes,
+        "selection": {
+            "goal_bucket": selected_bucket,
+            "bucket_share": totals[selected_bucket],
+            "model_share_scope": "conditional_within_goal_bucket",
+        },
     }
 
 

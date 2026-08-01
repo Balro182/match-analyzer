@@ -40,23 +40,26 @@ TURKU_MARIEHAMN = {
 }
 
 
-def test_ht_ranking_respects_away_direction_without_forcing_it_over_draw():
+def test_ht_ranking_uses_only_dominant_one_goal_class():
     picks = rank_exact_scores_ht(STATS)
     profile = ht_profile_diagnostics(STATS)
-    assert len(picks) == 3
-    assert "0:1" in [pick.score for pick in picks]
+    scores = [pick.score for pick in picks]
+
+    assert profile["selection"]["goal_bucket"] == "1"
+    assert set(scores) == {"0:1", "1:0"}
     assert profile["outcome"]["away"] > profile["outcome"]["home"]
-    assert 0 < sum(pick.model_share for pick in picks) < 100
+    assert scores[0] == "0:1"
+    assert 99.9 <= sum(pick.model_share for pick in picks) <= 100.1
 
 
-def test_ht_ranking_preserves_clear_home_direction_in_full_matrix():
+def test_ht_ranking_preserves_home_direction_inside_selected_class():
     picks = rank_exact_scores_ht(TURKU_MARIEHAMN, limit=5)
     profile = ht_profile_diagnostics(TURKU_MARIEHAMN)
     scores = [pick.score for pick in picks]
+
+    assert profile["selection"]["goal_bucket"] == "1"
     assert profile["outcome"]["home"] > profile["outcome"]["away"]
-    assert "1:0" in scores
-    assert "2:0" in scores
-    assert scores.index("1:0") < scores.index("3:0")
+    assert scores == ["1:0", "0:1"]
 
 
 def test_ft_ranking_prefers_one_one_profile():
@@ -71,4 +74,4 @@ def test_diagnostics_are_separate_from_betting_recommendations():
     result = exact_score_diagnostics(STATS)
     assert set(result) == {"ht", "ft", "ht_profile"}
     assert all("model_share" in row for row in result["ht"] + result["ft"])
-    assert set(result["ht_profile"]) == {"total_goals", "btts", "outcome"}
+    assert set(result["ht_profile"]) == {"total_goals", "btts", "outcome", "selection"}
