@@ -40,10 +40,12 @@ TURKU_MARIEHAMN = {
 }
 
 
-def test_ht_ranking_prefers_away_one_goal_profile():
+def test_ht_ranking_respects_away_direction_without_forcing_it_over_draw():
     picks = rank_exact_scores_ht(STATS)
     assert len(picks) == 3
-    assert picks[0].score == "0:1"
+    scores = [pick.score for pick in picks]
+    assert "0:1" in scores
+    assert "1:0" not in scores
     assert 0 < sum(pick.model_share for pick in picks) < 100
 
 
