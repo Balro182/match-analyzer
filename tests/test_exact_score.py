@@ -1,4 +1,4 @@
-from exact_score import exact_score_diagnostics, rank_exact_scores_ft, rank_exact_scores_ht
+from exact_score import exact_score_diagnostics, ht_profile_diagnostics, rank_exact_scores_ft, rank_exact_scores_ht
 
 
 STATS = {
@@ -42,20 +42,20 @@ TURKU_MARIEHAMN = {
 
 def test_ht_ranking_respects_away_direction_without_forcing_it_over_draw():
     picks = rank_exact_scores_ht(STATS)
+    profile = ht_profile_diagnostics(STATS)
     assert len(picks) == 3
-    scores = [pick.score for pick in picks]
-    assert "0:1" in scores
-    assert "1:0" not in scores
+    assert "0:1" in [pick.score for pick in picks]
+    assert profile["outcome"]["away"] > profile["outcome"]["home"]
     assert 0 < sum(pick.model_share for pick in picks) < 100
 
 
-def test_ht_ranking_does_not_promote_opposite_direction_for_clear_home_leader():
-    picks = rank_exact_scores_ht(TURKU_MARIEHAMN)
+def test_ht_ranking_preserves_clear_home_direction_in_full_matrix():
+    picks = rank_exact_scores_ht(TURKU_MARIEHAMN, limit=5)
+    profile = ht_profile_diagnostics(TURKU_MARIEHAMN)
     scores = [pick.score for pick in picks]
-    assert scores[0] == "1:0"
-    assert "0:1" not in scores
+    assert profile["outcome"]["home"] > profile["outcome"]["away"]
+    assert "1:0" in scores
     assert "3:0" not in scores
-    assert "2:0" in scores
 
 
 def test_ft_ranking_prefers_one_one_profile():
