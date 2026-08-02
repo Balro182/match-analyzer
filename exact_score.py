@@ -200,6 +200,15 @@ def _retain_high_ft_tail(stats, targets: dict[int, float], dominant_total: int) 
     return dominant_total <= 2 and high_tail >= 0.30 - 1e-12 and high_tail >= targets[dominant_total] - 0.05 - 1e-12 and over_35 >= 0.35 - 1e-12 and over_25 >= 0.40 - 1e-12 and btts >= 0.60 - 1e-12
 
 
+def _retain_adjacent_high_ft_total(targets: dict[int, float], dominant_total: int) -> tuple[int, ...]:
+    if dominant_total != 4:
+        return (dominant_total,)
+    three_share = targets[3]
+    if three_share >= 0.20 - 1e-12 and targets[4] - three_share <= 0.05 + 1e-12:
+        return (3, 4)
+    return (dominant_total,)
+
+
 def _selected_ft_totals(stats) -> tuple[int, ...]:
     targets = _ft_total_targets(stats)
     dominant_total = _dominant_ft_total(stats)
@@ -210,6 +219,9 @@ def _selected_ft_totals(stats) -> tuple[int, ...]:
         return close_totals
     if _retain_high_ft_tail(stats, targets, dominant_total):
         return tuple(sorted({dominant_total, 4, 5}))
+    adjacent_totals = _retain_adjacent_high_ft_total(targets, dominant_total)
+    if len(adjacent_totals) > 1:
+        return adjacent_totals
     return (dominant_total,)
 
 
@@ -328,8 +340,9 @@ def ft_profile_diagnostics(stats) -> dict[str, object]:
     ht_buckets = _selected_ht_buckets(stats)
     retained_zero = 0 in selected_totals and dominant_total != 0
     retained_high_tail = _retain_high_ft_tail(stats, targets, dominant_total)
-    retained_close = len(selected_totals) > 1 and not retained_zero and not retained_high_tail
-    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_high_tail_alternatives": retained_high_tail, "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
+    retained_adjacent_high = len(_retain_adjacent_high_ft_total(targets, dominant_total)) > 1
+    retained_close = len(selected_totals) > 1 and not retained_zero and not retained_high_tail and not retained_adjacent_high
+    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_adjacent_high_total_alternative": retained_adjacent_high, "retained_high_tail_alternatives": retained_high_tail, "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
 
 
 def exact_score_diagnostics(stats, limit: int = 3):
