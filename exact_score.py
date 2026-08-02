@@ -62,6 +62,25 @@ def _dominant_total_bucket(stats) -> str:
     return max(order, key=lambda key: (targets[key], -order.index(key)))
 
 
+def _observed_ht_outcome_targets(stats) -> dict[str, float]:
+    home, draw, away = _impl._ht_outcomes(stats)
+    return {"home": home / 100.0, "draw": draw / 100.0, "away": away / 100.0}
+
+
+def _dominant_observed_ht_outcome(stats) -> str:
+    targets = _observed_ht_outcome_targets(stats)
+    order = ("home", "draw", "away")
+    return max(order, key=lambda key: (targets[key], -order.index(key)))
+
+
+def _bucket_supports_outcome(bucket: str, outcome: str) -> bool:
+    if bucket == "0":
+        return outcome == "draw"
+    if bucket == "1":
+        return outcome in {"home", "away"}
+    return True
+
+
 def _retain_high_goal_ht_alternatives(stats, targets: dict[str, float]) -> bool:
     dominant_bucket = _dominant_total_bucket(stats)
     if dominant_bucket == "0":
@@ -82,20 +101,51 @@ def _retain_high_goal_ht_alternatives(stats, targets: dict[str, float]) -> bool:
     )
 
 
+def _retain_ht_outcome_conflict_alternatives(stats, targets: dict[str, float]) -> bool:
+    dominant_bucket = _dominant_total_bucket(stats)
+    dominant_outcome = _dominant_observed_ht_outcome(stats)
+    if _bucket_supports_outcome(dominant_bucket, dominant_outcome):
+        return False
+
+    ordered_shares = sorted(targets.values(), reverse=True)
+    total_gap = ordered_shares[0] - ordered_shares[1]
+    outcomes = _observed_ht_outcome_targets(stats)
+    ordered_outcomes = sorted(outcomes.values(), reverse=True)
+    outcome_margin = ordered_outcomes[0] - ordered_outcomes[1]
+
+    return total_gap < 0.15 - 1e-12 and outcome_margin >= 0.05 - 1e-12
+
+
 def _selected_ht_buckets(stats) -> tuple[str, ...]:
     targets = _target_total_buckets(stats)
     dominant_bucket = _dominant_total_bucket(stats)
-    if not _retain_high_goal_ht_alternatives(stats, targets):
-        return (dominant_bucket,)
-
     dominant_share = targets[dominant_bucket]
-    order = ("1", "2", "3+")
-    selected = tuple(
-        bucket
-        for bucket in order
-        if targets[bucket] > 0 and dominant_share - targets[bucket] <= 0.10 + 1e-12
-    )
-    return selected or (dominant_bucket,)
+
+    if _retain_high_goal_ht_alternatives(stats, targets):
+        order = ("1", "2", "3+")
+        selected = tuple(
+            bucket
+            for bucket in order
+            if targets[bucket] > 0 and dominant_share - targets[bucket] <= 0.10 + 1e-12
+        )
+        return selected or (dominant_bucket,)
+
+    if _retain_ht_outcome_conflict_alternatives(stats, targets):
+        dominant_outcome = _dominant_observed_ht_outcome(stats)
+        order = ("0", "1", "2", "3+")
+        selected = tuple(
+            bucket
+            for bucket in order
+            if bucket == dominant_bucket
+            or (
+                targets[bucket] > 0
+                and dominant_share - targets[bucket] <= 0.10 + 1e-12
+                and _bucket_supports_outcome(bucket, dominant_outcome)
+            )
+        )
+        return selected or (dominant_bucket,)
+
+    return (dominant_bucket,)
 
 
 def _target_btts(stats) -> dict[str, float]:
@@ -109,12 +159,7 @@ def _btts_class(score: str) -> str:
 
 
 def _soft_outcome_targets(matrix: dict[str, float], stats) -> dict[str, float]:
-    observed_home, observed_draw, observed_away = _impl._ht_outcomes(stats)
-    observed = {
-        "home": observed_home / 100.0,
-        "draw": observed_draw / 100.0,
-        "away": observed_away / 100.0,
-    }
+    observed = _observed_ht_outcome_targets(stats)
     base = {
         key: sum(value for score, value in matrix.items() if _score_outcome(score) == key)
         for key in observed
@@ -163,6 +208,9 @@ def ht_profile_diagnostics(stats) -> dict[str, object]:
     btts_yes = round(sum(value for score, value in matrix.items() if _btts_class(score) == "yes") * 100.0, 1)
     selected_bucket = _dominant_total_bucket(stats)
     selected_buckets = _selected_ht_buckets(stats)
+    targets = _target_total_buckets(stats)
+    retained_high = _retain_high_goal_ht_alternatives(stats, targets)
+    retained_conflict = _retain_ht_outcome_conflict_alternatives(stats, targets)
     return {
         "total_goals": totals,
         "btts": {"yes": btts_yes, "no": round(100.0 - btts_yes, 1)},
@@ -171,7 +219,10 @@ def ht_profile_diagnostics(stats) -> dict[str, object]:
             "goal_bucket": selected_bucket,
             "goal_buckets": list(selected_buckets),
             "bucket_share": totals[selected_bucket],
-            "retained_high_goal_alternatives": len(selected_buckets) > 1,
+            "dominant_observed_outcome": _dominant_observed_ht_outcome(stats),
+            "retained_high_goal_alternatives": retained_high,
+            "retained_outcome_conflict_alternatives": retained_conflict,
+            "hard_total_margin": 15.0,
             "model_share_scope": "conditional_within_selected_goal_buckets",
         },
     }
