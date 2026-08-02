@@ -309,8 +309,6 @@ def _extended_ft_base_matrix(stats, max_total: int = 8) -> dict[str, float]:
     team_scored = _impl._metric(stats, "Team scored") or (0.0, 0.0)
     decay = 0.90 if _strong_high_tail_profile(stats) else 0.82
     balanced_high_draw = _balanced_high_draw_profile(stats)
-    directional_guard = _directional_high_draw_guard(stats)
-    favored_outcome = _favored_ft_outcome(stats)
     candidates: dict[str, float] = {}
     for home_goals in range(max_total + 1):
         for away_goals in range(max_total + 1):
@@ -333,8 +331,6 @@ def _extended_ft_base_matrix(stats, max_total: int = 8) -> dict[str, float]:
                 raw *= decay ** (total - 5)
             if balanced_high_draw and outcome == "draw" and total >= 4:
                 raw *= 1.08
-            if directional_guard and outcome == favored_outcome and total >= 4:
-                raw *= 1.28
             candidates[f"{home_goals}:{away_goals}"] = raw / 100.0
     return _normalize_matrix(candidates)
 
@@ -366,6 +362,8 @@ def rank_exact_scores_ft(stats, limit: int = 3):
         candidates = compatible
     max_path = max((path_support[score] for score in candidates), default=1.0) or 1.0
     max_total_target = max((targets[goals] for goals in selected_totals), default=1.0) or 1.0
+    directional_guard = _directional_high_draw_guard(stats)
+    favored_outcome = _favored_ft_outcome(stats)
     ranked = []
     for score, raw_probability in candidates.items():
         score_total_class = _ft_total_class(score)
@@ -373,6 +371,8 @@ def rank_exact_scores_ft(stats, limit: int = 3):
         path_fit = path_support[score] / max_path
         market_fit = _ft_market_alignment(score, stats)
         rank_value = raw_probability * (0.35 + 0.65 * total_fit) * (0.30 + 0.70 * path_fit) * (0.45 + 0.55 * market_fit)
+        if directional_guard and _score_outcome(score) == favored_outcome and sum(_score_tuple(score)) >= 4:
+            rank_value *= 1.40
         ranked.append((score, rank_value, raw_probability))
     return _normalize_ft_selection(ranked, limit)
 
@@ -387,7 +387,7 @@ def ft_profile_diagnostics(stats) -> dict[str, object]:
     retained_high_tail = _retain_high_ft_tail(stats, targets, dominant_total)
     retained_adjacent_high = len(_retain_adjacent_high_ft_total(targets, dominant_total)) > 1
     retained_close = len(selected_totals) > 1 and not retained_zero and not retained_high_tail and not retained_adjacent_high
-    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_adjacent_high_total_alternative": retained_adjacent_high, "retained_high_tail_alternatives": retained_high_tail, "strong_high_tail_decay": _strong_high_tail_profile(stats), "balanced_high_draw_bonus": _balanced_high_draw_profile(stats), "high_draw_directional_margin": round(_high_draw_directional_margin(stats), 1), "high_draw_team_twice_edge": round(_high_draw_team_twice_edge(stats), 1), "directional_high_draw_guard": _directional_high_draw_guard(stats), "directional_high_score_boost": 1.28 if _directional_high_draw_guard(stats) else 1.0, "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
+    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_adjacent_high_total_alternative": retained_adjacent_high, "retained_high_tail_alternatives": retained_high_tail, "strong_high_tail_decay": _strong_high_tail_profile(stats), "balanced_high_draw_bonus": _balanced_high_draw_profile(stats), "high_draw_directional_margin": round(_high_draw_directional_margin(stats), 1), "high_draw_team_twice_edge": round(_high_draw_team_twice_edge(stats), 1), "directional_high_draw_guard": _directional_high_draw_guard(stats), "directional_high_score_boost": 1.40 if _directional_high_draw_guard(stats) else 1.0, "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
 
 
 def exact_score_diagnostics(stats, limit: int = 3):
