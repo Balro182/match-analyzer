@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -32,7 +33,19 @@ def save_analysis(match: dict[str, Any], recommendations: Iterable[Any], algorit
         if duplicate_policy == "return_existing":
             return int(duplicate["id"])
         raise DuplicateAnalysisError(f"Analiza już istnieje (ID {duplicate['id']})")
-    match_id = base.save_analysis(match, recommendations, algorithm_version, predicted_ht, predicted_ft, analyzed_at, path)
+    try:
+        match_id = base.save_analysis(match, recommendations, algorithm_version, predicted_ht, predicted_ft, analyzed_at, path)
+    except sqlite3.IntegrityError as exc:
+        # A second-level timestamp can race with the pre-insert duplicate check.
+        # Keep the public fallback API deterministic instead of leaking SQLite details.
+        duplicate = next((row for row in base.list_matches(path) if row["home_team"] == home and row["away_team"] == away
+                          and row["algorithm_version"] == algorithm_version), None)
+        if duplicate_policy == "return_existing" and duplicate:
+            return int(duplicate["id"])
+        if "UNIQUE constraint failed" in str(exc):
+            suffix = f" (ID {duplicate['id']})" if duplicate else ""
+            raise DuplicateAnalysisError(f"Analiza już istnieje{suffix}") from exc
+        raise
     if odds_by_rule:
         # Existing SQLite schema stores odds during settlement; preserve prediction odds by updating now.
         with base._connect(path) as conn:
