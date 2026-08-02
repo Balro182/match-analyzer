@@ -33,22 +33,25 @@ SILKEBORG_COPENHAGEN = {
 }
 
 
-def test_directional_edge_disables_balanced_high_draw_bonus():
+def test_directional_scoring_edge_disables_draw_bonus_and_promotes_favorite():
     profile = ft_profile_diagnostics(SILKEBORG_COPENHAGEN)["selection"]
     scores = [pick.score for pick in rank_exact_scores_ft(SILKEBORG_COPENHAGEN, limit=3)]
 
-    assert profile["balanced_high_draw_bonus"] is False
     assert profile["high_draw_directional_margin"] == 15.0
+    assert profile["high_draw_team_twice_edge"] == 30.0
+    assert profile["directional_high_draw_guard"] is True
+    assert profile["balanced_high_draw_bonus"] is False
     assert scores[0] == "1:3"
     assert "2:2" in scores
 
 
-def test_balanced_high_draw_bonus_remains_at_ten_point_boundary():
+def test_draw_bonus_remains_when_scoring_edge_is_small():
     balanced = dict(SILKEBORG_COPENHAGEN)
-    balanced["Win"] = {"home": 35, "away": 45}
-    balanced["Lose"] = {"home": 35, "away": 15}
+    balanced["Team scored twice"] = {"home": 50, "away": 60}
 
     profile = ft_profile_diagnostics(balanced)["selection"]
 
-    assert profile["high_draw_directional_margin"] == 10.0
+    assert profile["high_draw_directional_margin"] == 15.0
+    assert profile["high_draw_team_twice_edge"] == 10.0
+    assert profile["directional_high_draw_guard"] is False
     assert profile["balanced_high_draw_bonus"] is True
