@@ -179,13 +179,17 @@ def _retain_zero_goal_ft(stats, targets: dict[int, float], dominant_total: int) 
     return zero_share >= 0.12 and zero_share >= 0.50 * one_share and btts_no >= 0.65 and under_15 >= 0.40
 
 
-def _retain_close_ft_totals(targets: dict[int, float], dominant_total: int) -> tuple[int, ...]:
-    dominant_share = targets[dominant_total]
+def _retain_close_ft_totals(stats, targets: dict[int, float], dominant_total: int) -> tuple[int, ...]:
+    if dominant_total != 1 or "0" not in _selected_ht_buckets(stats):
+        return (dominant_total,)
+    one_share = targets[1]
+    three_share = targets[3]
     ordered = sorted(targets.values(), reverse=True)
     if len(ordered) < 2 or ordered[0] - ordered[1] >= 0.15 - 1e-12:
         return (dominant_total,)
-    selected = tuple(total for total in range(6) if targets[total] >= 0.15 - 1e-12 and dominant_share - targets[total] <= 0.10 + 1e-12)
-    return selected or (dominant_total,)
+    if three_share >= 0.15 - 1e-12 and one_share - three_share <= 0.10 + 1e-12:
+        return (1, 3)
+    return (dominant_total,)
 
 
 def _selected_ft_totals(stats) -> tuple[int, ...]:
@@ -193,7 +197,7 @@ def _selected_ft_totals(stats) -> tuple[int, ...]:
     dominant_total = _dominant_ft_total(stats)
     if _retain_zero_goal_ft(stats, targets, dominant_total):
         return (0, 1)
-    return _retain_close_ft_totals(targets, dominant_total)
+    return _retain_close_ft_totals(stats, targets, dominant_total)
 
 
 def _valid_score_path(ht_score: str, ft_score: str) -> bool:
