@@ -47,16 +47,47 @@ WISLA_WIDZEW = {
     "Over 0.5 goals at half-time": {"home": 70, "away": 30}, "Over 1.5 goals at half-time": {"home": 20, "away": 0}, "Over 2.5 goals at half-time": {"home": 10, "away": 0},
 }
 
+LECHIA_WARTA = {
+    "Goals scored per game": {"home": 1.2, "away": 2.1}, "Goals conceded per game": {"home": 2.4, "away": 1.6},
+    "Win": {"home": 20, "away": 60}, "Draw": {"home": 20, "away": 10}, "Lose": {"home": 60, "away": 30},
+    "Team win first half": {"home": 20, "away": 40}, "Team draw at half time": {"home": 30, "away": 20}, "Team lost first half": {"home": 50, "away": 40},
+    "Both Teams to Score": {"home": 70, "away": 60}, "BTTS in first-half": {"home": 40, "away": 20},
+    "Win and BTTS": {"home": 20, "away": 20}, "Draw and BTTS": {"home": 20, "away": 10}, "Lose and BTTS": {"home": 30, "away": 30},
+    "Team scored twice": {"home": 30, "away": 60}, "Clean sheets": {"home": 0, "away": 40}, "Team scored": {"home": 70, "away": 100},
+    "Match total goals 0": {"home": 0, "away": 0}, "Match total goals 1": {"home": 0, "away": 20},
+    "Match total goals 2": {"home": 10, "away": 10}, "Match total goals 3": {"home": 50, "away": 10}, "Match total goals 4": {"home": 20, "away": 30},
+    "Under 1.5 goals": {"home": 0, "away": 20}, "Under 3.5 goals": {"home": 60, "away": 40},
+    "Over 0.5 goals at half-time": {"home": 90, "away": 90}, "Over 1.5 goals at half-time": {"home": 70, "away": 40}, "Over 2.5 goals at half-time": {"home": 30, "away": 20},
+}
+
 
 def test_ht_ranking_uses_only_dominant_one_goal_class():
     picks = rank_exact_scores_ht(STATS)
-    assert ht_profile_diagnostics(STATS)["selection"]["goal_bucket"] == "1"
+    profile = ht_profile_diagnostics(STATS)["selection"]
+    assert profile["goal_bucket"] == "1"
+    assert profile["goal_buckets"] == ["1"]
+    assert profile["retained_high_goal_alternatives"] is False
     assert [pick.score for pick in picks] == ["0:1", "1:0"]
     assert 99.9 <= sum(pick.model_share for pick in picks) <= 100.1
 
 
 def test_ht_ranking_preserves_home_direction_inside_selected_class():
     assert [pick.score for pick in rank_exact_scores_ht(TURKU_MARIEHAMN, limit=5)] == ["1:0", "0:1"]
+
+
+def test_ht_ranking_retains_flat_high_goal_classes():
+    picks = rank_exact_scores_ht(LECHIA_WARTA, limit=20)
+    scores = [pick.score for pick in picks]
+    profile = ht_profile_diagnostics(LECHIA_WARTA)["selection"]
+
+    assert profile["goal_bucket"] == "1"
+    assert profile["goal_buckets"] == ["1", "2", "3+"]
+    assert profile["retained_high_goal_alternatives"] is True
+    assert "0:1" in scores
+    assert "0:2" in scores
+    assert "0:3" in scores
+    assert "0:0" not in scores
+    assert 99.9 <= sum(pick.model_share for pick in picks) <= 100.1
 
 
 def test_ft_ranking_uses_dominant_total_and_valid_ht_paths():
@@ -91,6 +122,16 @@ def test_ft_ranking_retains_zero_zero_in_low_total_spread():
     assert set(scores) == {"0:0", "1:0", "0:1"}
     assert scores[0] == "1:0"
     assert 99.9 <= sum(pick.model_share for pick in picks) <= 100.1
+
+
+def test_lechia_warta_ft_keeps_actual_zero_three_path():
+    scores = [pick.score for pick in rank_exact_scores_ft(LECHIA_WARTA, limit=5)]
+    profile = ft_profile_diagnostics(LECHIA_WARTA)["selection"]
+
+    assert profile["goal_total"] == 3
+    assert profile["ht_goal_buckets"] == ["1", "2", "3+"]
+    assert "0:3" in scores
+    assert all(sum(map(int, score.split(":"))) == 3 for score in scores)
 
 
 def test_diagnostics_include_ht_and_ft_selection_profiles():

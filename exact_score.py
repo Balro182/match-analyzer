@@ -62,6 +62,42 @@ def _dominant_total_bucket(stats) -> str:
     return max(order, key=lambda key: (targets[key], -order.index(key)))
 
 
+def _retain_high_goal_ht_alternatives(stats, targets: dict[str, float]) -> bool:
+    dominant_bucket = _dominant_total_bucket(stats)
+    if dominant_bucket == "0":
+        return False
+
+    over_05 = _impl._clamp(_impl._mean_metric(stats, "Over 0.5 goals at half-time")) / 100.0
+    over_15 = _impl._clamp(_impl._mean_metric(stats, "Over 1.5 goals at half-time")) / 100.0
+    over_25 = _impl._clamp(_impl._mean_metric(stats, "Over 2.5 goals at half-time")) / 100.0
+    dominant_share = targets[dominant_bucket]
+    three_plus_share = targets["3+"]
+
+    return (
+        over_05 >= 0.85
+        and over_15 >= 0.50
+        and over_25 >= 0.20
+        and three_plus_share >= 0.20
+        and dominant_share - three_plus_share <= 0.10 + 1e-12
+    )
+
+
+def _selected_ht_buckets(stats) -> tuple[str, ...]:
+    targets = _target_total_buckets(stats)
+    dominant_bucket = _dominant_total_bucket(stats)
+    if not _retain_high_goal_ht_alternatives(stats, targets):
+        return (dominant_bucket,)
+
+    dominant_share = targets[dominant_bucket]
+    order = ("1", "2", "3+")
+    selected = tuple(
+        bucket
+        for bucket in order
+        if targets[bucket] > 0 and dominant_share - targets[bucket] <= 0.10 + 1e-12
+    )
+    return selected or (dominant_bucket,)
+
+
 def _target_btts(stats) -> dict[str, float]:
     yes = _impl._clamp(_impl._mean_metric(stats, "BTTS in first-half")) / 100.0
     return {"yes": yes, "no": 1.0 - yes}
@@ -105,12 +141,16 @@ def _ipf_ht_matrix(stats, iterations: int = 60) -> dict[str, float]:
 
 def rank_exact_scores_ht(stats, limit: int = 3):
     matrix = _ipf_ht_matrix(stats)
-    dominant_bucket = _dominant_total_bucket(stats)
-    selected = [(score, value) for score, value in matrix.items() if _total_bucket(score) == dominant_bucket]
+    selected_buckets = _selected_ht_buckets(stats)
+    selected = [
+        (score, value)
+        for score, value in matrix.items()
+        if _total_bucket(score) in selected_buckets
+    ]
     return _impl._normalize_top(selected, limit)
 
 
-def ht_profile_diagnostics(stats) -> dict[str, dict[str, float] | dict[str, str | float]]:
+def ht_profile_diagnostics(stats) -> dict[str, object]:
     matrix = _ipf_ht_matrix(stats)
     totals = {
         key: round(sum(value for score, value in matrix.items() if _total_bucket(score) == key) * 100.0, 1)
@@ -122,14 +162,17 @@ def ht_profile_diagnostics(stats) -> dict[str, dict[str, float] | dict[str, str 
     }
     btts_yes = round(sum(value for score, value in matrix.items() if _btts_class(score) == "yes") * 100.0, 1)
     selected_bucket = _dominant_total_bucket(stats)
+    selected_buckets = _selected_ht_buckets(stats)
     return {
         "total_goals": totals,
         "btts": {"yes": btts_yes, "no": round(100.0 - btts_yes, 1)},
         "outcome": outcomes,
         "selection": {
             "goal_bucket": selected_bucket,
+            "goal_buckets": list(selected_buckets),
             "bucket_share": totals[selected_bucket],
-            "model_share_scope": "conditional_within_goal_bucket",
+            "retained_high_goal_alternatives": len(selected_buckets) > 1,
+            "model_share_scope": "conditional_within_selected_goal_buckets",
         },
     }
 
@@ -177,11 +220,11 @@ def _valid_score_path(ht_score: str, ft_score: str) -> bool:
 
 def _ft_path_support(ft_score: str, stats) -> float:
     ht_matrix = _ipf_ht_matrix(stats)
-    ht_bucket = _dominant_total_bucket(stats)
+    selected_ht_buckets = _selected_ht_buckets(stats)
     return sum(
         probability
         for ht_score, probability in ht_matrix.items()
-        if _total_bucket(ht_score) == ht_bucket and _valid_score_path(ht_score, ft_score)
+        if _total_bucket(ht_score) in selected_ht_buckets and _valid_score_path(ht_score, ft_score)
     )
 
 
@@ -273,6 +316,7 @@ def ft_profile_diagnostics(stats) -> dict[str, object]:
     selected_totals = _selected_ft_totals(stats)
     targets = _ft_total_targets(stats)
     ht_bucket = _dominant_total_bucket(stats)
+    ht_buckets = _selected_ht_buckets(stats)
     retained_zero = 0 in selected_totals and dominant_total != 0
     return {
         "total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()},
@@ -281,6 +325,7 @@ def ft_profile_diagnostics(stats) -> dict[str, object]:
             "goal_totals": list(selected_totals),
             "total_share": round(targets[dominant_total] * 100.0, 1),
             "ht_goal_bucket": ht_bucket,
+            "ht_goal_buckets": list(ht_buckets),
             "requires_valid_ht_ft_progression": True,
             "retained_zero_goal_alternative": retained_zero,
             "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"],

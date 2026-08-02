@@ -49,8 +49,9 @@ def test_profile_reports_selected_goal_class_and_scope():
     profile = ht_profile_diagnostics(WIECZYSTA_LECH)
 
     assert profile["selection"]["goal_bucket"] == "2"
+    assert profile["selection"]["goal_buckets"] == ["2"]
     assert abs(profile["selection"]["bucket_share"] - 35.0) <= 2.5
-    assert profile["selection"]["model_share_scope"] == "conditional_within_goal_bucket"
+    assert profile["selection"]["model_share_scope"] == "conditional_within_selected_goal_buckets"
 
 
 def test_outcome_is_soft_not_forced_to_raw_average():
