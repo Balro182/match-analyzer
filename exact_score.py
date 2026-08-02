@@ -256,6 +256,23 @@ def _ft_market_alignment(score: str, stats) -> float:
     return 0.35 * outcome_fit + 0.30 * btts_fit + 0.20 * allocation_fit + 0.15 * team_over_fit
 
 
+def _strong_high_tail_profile(stats) -> bool:
+    targets = _ft_total_targets(stats)
+    high_tail = targets[4] + targets[5]
+    btts = _impl._clamp(_impl._mean_metric(stats, "Both Teams to Score")) / 100.0
+    return high_tail >= 0.40 - 1e-12 and btts >= 0.70 - 1e-12
+
+
+def _balanced_high_draw_profile(stats) -> bool:
+    scored = _impl._metric(stats, "Goals scored per game") or (1.0, 1.0)
+    conceded = _impl._metric(stats, "Goals conceded per game") or (1.0, 1.0)
+    expected_home = (scored[0] + conceded[1]) / 2.0
+    expected_away = (scored[1] + conceded[0]) / 2.0
+    _, draw, _ = _impl._ft_outcomes(stats)
+    btts = _impl._clamp(_impl._mean_metric(stats, "Both Teams to Score")) / 100.0
+    return btts >= 0.70 - 1e-12 and draw >= 20.0 - 1e-12 and abs(expected_home - expected_away) <= 0.25 + 1e-12
+
+
 def _extended_ft_base_matrix(stats, max_total: int = 8) -> dict[str, float]:
     totals = _ft_total_targets(stats)
     home_outcome, draw_outcome, away_outcome = _impl._ft_outcomes(stats)
@@ -270,6 +287,8 @@ def _extended_ft_base_matrix(stats, max_total: int = 8) -> dict[str, float]:
     directional = {"home": ((win_btts[0] + lose_btts[1]) / 2, home_outcome), "draw": (sum(draw_btts) / 2, draw_outcome), "away": ((lose_btts[0] + win_btts[1]) / 2, away_outcome)}
     clean = _impl._metric(stats, "Clean sheets") or (0.0, 0.0)
     team_scored = _impl._metric(stats, "Team scored") or (0.0, 0.0)
+    decay = 0.90 if _strong_high_tail_profile(stats) else 0.82
+    balanced_high_draw = _balanced_high_draw_profile(stats)
     candidates: dict[str, float] = {}
     for home_goals in range(max_total + 1):
         for away_goals in range(max_total + 1):
@@ -289,7 +308,9 @@ def _extended_ft_base_matrix(stats, max_total: int = 8) -> dict[str, float]:
                 allocation_fit = (allocation_fit + clean[1] + (100.0 - team_scored[0])) / 3.0
             raw = 0.28 * totals.get(total_class, 0.0) * 100.0 + 0.20 * btts_fit + 0.20 * _impl._outcome_fit(home_goals, away_goals, home_outcome, draw_outcome, away_outcome) + 0.24 * allocation_fit + 0.08 * result_btts_fit
             if total > 5:
-                raw *= 0.82 ** (total - 5)
+                raw *= decay ** (total - 5)
+            if balanced_high_draw and outcome == "draw" and total >= 4:
+                raw *= 1.08
             candidates[f"{home_goals}:{away_goals}"] = raw / 100.0
     return _normalize_matrix(candidates)
 
@@ -342,7 +363,7 @@ def ft_profile_diagnostics(stats) -> dict[str, object]:
     retained_high_tail = _retain_high_ft_tail(stats, targets, dominant_total)
     retained_adjacent_high = len(_retain_adjacent_high_ft_total(targets, dominant_total)) > 1
     retained_close = len(selected_totals) > 1 and not retained_zero and not retained_high_tail and not retained_adjacent_high
-    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_adjacent_high_total_alternative": retained_adjacent_high, "retained_high_tail_alternatives": retained_high_tail, "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
+    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_adjacent_high_total_alternative": retained_adjacent_high, "retained_high_tail_alternatives": retained_high_tail, "strong_high_tail_decay": _strong_high_tail_profile(stats), "balanced_high_draw_bonus": _balanced_high_draw_profile(stats), "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
 
 
 def exact_score_diagnostics(stats, limit: int = 3):
