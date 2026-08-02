@@ -201,12 +201,11 @@ def _retain_high_ft_tail(stats, targets: dict[int, float], dominant_total: int) 
 
 
 def _retain_adjacent_high_ft_total(targets: dict[int, float], dominant_total: int) -> tuple[int, ...]:
-    if dominant_total not in {3, 4}:
+    if dominant_total != 4:
         return (dominant_total,)
-    adjacent_total = 4 if dominant_total == 3 else 3
-    adjacent_share = targets[adjacent_total]
-    if adjacent_share >= 0.20 - 1e-12 and targets[dominant_total] - adjacent_share <= 0.05 + 1e-12:
-        return tuple(sorted((dominant_total, adjacent_total)))
+    three_share = targets[3]
+    if three_share >= 0.20 - 1e-12 and targets[4] - three_share <= 0.05 + 1e-12:
+        return (3, 4)
     return (dominant_total,)
 
 
