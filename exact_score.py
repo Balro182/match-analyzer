@@ -237,6 +237,14 @@ def _ft_path_support(ft_score: str, stats) -> float:
     return sum(probability for ht_score, probability in ht_matrix.items() if _total_bucket(ht_score) in selected_ht_buckets and _valid_score_path(ht_score, ft_score))
 
 
+def _team_twice_market_weight(stats) -> float:
+    twice = _impl._metric(stats, "Team scored twice")
+    if twice is None:
+        return 0.075
+    edge = abs(_impl._clamp(twice[0]) - _impl._clamp(twice[1]))
+    return 0.15 if edge >= 20.0 - 1e-12 else 0.075
+
+
 def _ft_market_alignment(score: str, stats) -> float:
     home_goals, away_goals = _score_tuple(score)
     outcome_home, outcome_draw, outcome_away = _impl._ft_outcomes(stats)
@@ -253,7 +261,9 @@ def _ft_market_alignment(score: str, stats) -> float:
     if twice is not None:
         home_twice, away_twice = (_impl._clamp(value) / 100.0 for value in twice)
         team_over_fit = ((home_twice if home_goals >= 2 else 1.0 - home_twice) + (away_twice if away_goals >= 2 else 1.0 - away_twice)) / 2.0
-    return 0.35 * outcome_fit + 0.30 * btts_fit + 0.20 * allocation_fit + 0.15 * team_over_fit
+    team_twice_weight = _team_twice_market_weight(stats)
+    other_weight_scale = (1.0 - team_twice_weight) / 0.85
+    return other_weight_scale * (0.35 * outcome_fit + 0.30 * btts_fit + 0.20 * allocation_fit) + team_twice_weight * team_over_fit
 
 
 def _strong_high_tail_profile(stats) -> bool:
@@ -387,7 +397,7 @@ def ft_profile_diagnostics(stats) -> dict[str, object]:
     retained_high_tail = _retain_high_ft_tail(stats, targets, dominant_total)
     retained_adjacent_high = len(_retain_adjacent_high_ft_total(targets, dominant_total)) > 1
     retained_close = len(selected_totals) > 1 and not retained_zero and not retained_high_tail and not retained_adjacent_high
-    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_adjacent_high_total_alternative": retained_adjacent_high, "retained_high_tail_alternatives": retained_high_tail, "strong_high_tail_decay": _strong_high_tail_profile(stats), "balanced_high_draw_bonus": _balanced_high_draw_profile(stats), "high_draw_directional_margin": round(_high_draw_directional_margin(stats), 1), "high_draw_team_twice_edge": round(_high_draw_team_twice_edge(stats), 1), "directional_high_draw_guard": _directional_high_draw_guard(stats), "directional_high_score_boost": 1.40 if _directional_high_draw_guard(stats) else 1.0, "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
+    return {"total_goals": {str(key): round(value * 100.0, 1) for key, value in targets.items()}, "selection": {"goal_total": dominant_total, "goal_totals": list(selected_totals), "total_share": round(targets[dominant_total] * 100.0, 1), "high_tail_share": round((targets[4] + targets[5]) * 100.0, 1), "hard_total_margin": 15.0, "retained_close_total_alternatives": retained_close, "retained_adjacent_high_total_alternative": retained_adjacent_high, "retained_high_tail_alternatives": retained_high_tail, "strong_high_tail_decay": _strong_high_tail_profile(stats), "balanced_high_draw_bonus": _balanced_high_draw_profile(stats), "high_draw_directional_margin": round(_high_draw_directional_margin(stats), 1), "high_draw_team_twice_edge": round(_high_draw_team_twice_edge(stats), 1), "directional_high_draw_guard": _directional_high_draw_guard(stats), "directional_high_score_boost": 1.40 if _directional_high_draw_guard(stats) else 1.0, "extended_ft_score_grid": retained_high_tail, "ht_goal_bucket": ht_bucket, "ht_goal_buckets": list(ht_buckets), "requires_valid_ht_ft_progression": True, "retained_zero_goal_alternative": retained_zero, "market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "team_scored_twice_default_weight": 7.5, "team_scored_twice_strong_edge_weight": 15.0, "team_scored_twice_strong_edge_threshold": 20.0, "team_scored_twice_active_weight": round(_team_twice_market_weight(stats) * 100.0, 1), "model_share_scope": "renormalized_within_displayed_ft_top_scores"}}
 
 
 def exact_score_diagnostics(stats, limit: int = 3):
