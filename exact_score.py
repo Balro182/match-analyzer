@@ -358,7 +358,16 @@ def _normalize_ft_selection(ranked: list[tuple[str, float, float]], limit: int) 
     displayed_total = sum(max(0.0, rank_value) for _, rank_value, _ in displayed)
     if displayed_total <= 0:
         return []
-    return [ExactScorePick(score=score, model_share=round(max(0.0, rank_value) / displayed_total * 100.0, 1), raw_score=round(max(0.0, raw_probability) * 100.0, 2)) for score, rank_value, raw_probability in displayed]
+    picks = []
+    allocated_share = 0.0
+    for index, (score, rank_value, raw_probability) in enumerate(displayed):
+        if index == len(displayed) - 1:
+            model_share = round(100.0 - allocated_share, 1)
+        else:
+            model_share = round(max(0.0, rank_value) / displayed_total * 100.0, 1)
+            allocated_share += model_share
+        picks.append(ExactScorePick(score=score, model_share=model_share, raw_score=round(max(0.0, raw_probability) * 100.0, 2)))
+    return picks
 
 
 def rank_exact_scores_ft(stats, limit: int = 3):
