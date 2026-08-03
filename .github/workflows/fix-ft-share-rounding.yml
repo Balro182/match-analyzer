@@ -1,0 +1,38 @@
+name: Fix FT share rounding
+
+on:
+  push:
+    branches:
+      - agent/calibrate-team-scored-twice-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[ft-share-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/calibrate-team-scored-twice-v2
+          fetch-depth: 0
+      - name: Patch normalization
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('exact_score.py')
+          text = path.read_text()
+          old = '    return [ExactScorePick(score=score, model_share=round(max(0.0, rank_value) / displayed_total * 100.0, 1), raw_score=round(max(0.0, raw_probability) * 100.0, 2)) for score, rank_value, raw_probability in displayed]\n'
+          new = '''    picks = []\n    allocated_share = 0.0\n    for index, (score, rank_value, raw_probability) in enumerate(displayed):\n        if index == len(displayed) - 1:\n            model_share = round(100.0 - allocated_share, 1)\n        else:\n            model_share = round(max(0.0, rank_value) / displayed_total * 100.0, 1)\n            allocated_share += model_share\n        picks.append(ExactScorePick(score=score, model_share=model_share, raw_score=round(max(0.0, raw_probability) * 100.0, 2)))\n    return picks\n'''
+          if text.count(old) != 1:
+              raise SystemExit('Unexpected normalization return count')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add exact_score.py
+          git commit -m "Close displayed FT shares to 100 percent [ft-share-fixed]"
+          git push origin HEAD:agent/calibrate-team-scored-twice-v2
