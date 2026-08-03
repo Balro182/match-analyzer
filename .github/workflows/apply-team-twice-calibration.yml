@@ -1,0 +1,62 @@
+name: Apply team-scored-twice calibration
+
+on:
+  push:
+    branches:
+      - agent/calibrate-team-scored-twice-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[team-twice-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/calibrate-team-scored-twice-v2
+          fetch-depth: 0
+      - name: Apply guarded patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('exact_score.py')
+          text = path.read_text()
+
+          marker = 'def _team_twice_market_weight(stats) -> float:'
+          if marker in text:
+              raise SystemExit('Patch already applied')
+
+          anchor = '''def _ft_market_alignment(score: str, stats) -> float:\n'''
+          helper = '''def _team_twice_market_weight(stats) -> float:\n    twice = _impl._metric(stats, "Team scored twice")\n    if twice is None:\n        return 0.075\n    edge = abs(_impl._clamp(twice[0]) - _impl._clamp(twice[1]))\n    return 0.15 if edge >= 20.0 - 1e-12 else 0.075\n\n\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit('Unexpected _ft_market_alignment anchor count')
+          text = text.replace(anchor, helper + anchor, 1)
+
+          old_return = '    return 0.35 * outcome_fit + 0.30 * btts_fit + 0.20 * allocation_fit + 0.15 * team_over_fit\n'
+          new_return = '''    team_twice_weight = _team_twice_market_weight(stats)\n    other_weight_scale = (1.0 - team_twice_weight) / 0.85\n    return other_weight_scale * (0.35 * outcome_fit + 0.30 * btts_fit + 0.20 * allocation_fit) + team_twice_weight * team_over_fit\n'''
+          if text.count(old_return) != 1:
+              raise SystemExit('Unexpected market alignment return count')
+          text = text.replace(old_return, new_return, 1)
+
+          old_diag = '"market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "model_share_scope"'
+          new_diag = '"market_alignment": ["outcome", "BTTS", "team goals", "team scored twice"], "team_scored_twice_default_weight": 7.5, "team_scored_twice_strong_edge_weight": 15.0, "team_scored_twice_strong_edge_threshold": 20.0, "team_scored_twice_active_weight": round(_team_twice_market_weight(stats) * 100.0, 1), "model_share_scope"'
+          if text.count(old_diag) != 1:
+              raise SystemExit('Unexpected diagnostics anchor count')
+          text = text.replace(old_diag, new_diag, 1)
+          path.write_text(text)
+
+          test = Path('tests/test_team_scored_twice_calibration.py')
+          test.write_text('''from exact_score import _ft_market_alignment, ft_profile_diagnostics\n\n\ndef _stats(home_twice: float, away_twice: float):\n    return {\n        "Goals scored per game": {"home": 1.4, "away": 1.0},\n        "Goals conceded per game": {"home": 0.9, "away": 1.5},\n        "Team scored twice": {"home": home_twice, "away": away_twice},\n        "Win": {"home": 40, "away": 30},\n        "Draw": {"home": 40, "away": 10},\n        "Lose": {"home": 20, "away": 60},\n        "Both Teams to Score": {"home": 60, "away": 30},\n        "Match total goals 0": {"home": 10, "away": 0},\n        "Match total goals 1": {"home": 20, "away": 20},\n        "Match total goals 2": {"home": 30, "away": 40},\n        "Match total goals 3": {"home": 20, "away": 20},\n        "Match total goals 4": {"home": 20, "away": 10},\n        "Under 3.5 goals": {"home": 80, "away": 80},\n        "Team win first half": {"home": 30, "away": 30},\n        "Team draw at half time": {"home": 50, "away": 30},\n        "Team lost first half": {"home": 20, "away": 40},\n        "BTTS in first-half": {"home": 30, "away": 20},\n        "Over 0.5 goals at half-time": {"home": 70, "away": 80},\n        "Over 1.5 goals at half-time": {"home": 50, "away": 50},\n        "Over 2.5 goals at half-time": {"home": 10, "away": 10},\n    }\n\n\ndef test_standard_team_twice_signal_uses_reduced_weight():\n    profile = ft_profile_diagnostics(_stats(30, 30))["selection"]\n    assert profile["team_scored_twice_active_weight"] == 7.5\n    assert profile["team_scored_twice_default_weight"] == 7.5\n\n\ndef test_strong_directional_edge_keeps_full_weight():\n    profile = ft_profile_diagnostics(_stats(50, 80))["selection"]\n    assert profile["team_scored_twice_active_weight"] == 15.0\n    assert profile["team_scored_twice_strong_edge_threshold"] == 20.0\n\n\ndef test_reduced_weight_limits_one_one_bias():\n    balanced = _stats(30, 30)\n    no_signal = _stats(50, 50)\n    balanced_gap = _ft_market_alignment("1:1", balanced) - _ft_market_alignment("2:0", balanced)\n    neutral_gap = _ft_market_alignment("1:1", no_signal) - _ft_market_alignment("2:0", no_signal)\n    assert balanced_gap - neutral_gap < 0.02\n''')
+          PY
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add exact_score.py tests/test_team_scored_twice_calibration.py
+          git commit -m "Calibrate team scored twice weight [team-twice-patched]"
+          git push origin HEAD:agent/calibrate-team-scored-twice-v2
